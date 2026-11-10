@@ -27,6 +27,7 @@ namespace atrium {
 namespace {
 
 constexpr UINT WM_BAR_CAPTURE = WM_APP + 0x70; // wParam 1: Atrium may show in screenshots (render thread -> UI thread)
+constexpr UINT WM_BAR_LAYOUT = WM_APP + 0x71; // defer DPI relayout until SetWindowPos returns
 
 // DCompositionWaitForCompositorClock (Windows 11): waits for the next composed frame or a handle;
 // WAIT_OBJECT_0 + count is the clock. Looked up at run time (absent before build 22000).
@@ -57,10 +58,24 @@ constexpr UINT kGuardMs = 1000;
 constexpr UINT kGuardFastMs = 150; // while below a system taskbar the user is using
 constexpr UINT_PTR kSlideTimer = 4;   // the slide out is over: hide the windows
 constexpr UINT_PTR kPointerTimer = 5; // while covered: watch the pointer
+constexpr UINT_PTR kDisplayTimer = 6; // the shared Dock's cross-display gesture
 constexpr UINT kPointerMs = 50;
 constexpr DWORD kLeaveMs = 500;       // a revealed bar goes down this long after the pointer left it
 
-Bar* g_guard = nullptr; // the bar whose stacking the WinEvent hooks look after
+std::map<HWINEVENTHOOK, Bar*> g_guards; // each display has its own stacking guard
+struct CaptureWindows { HWND visual, input; bool visible; };
+std::map<Bar*, CaptureWindows> g_capturePolicies; // UI-thread only
+
+void ApplyCapturePolicies()
+{
+    // One capture fallback must exclude every Atrium window to prevent feedback.
+    const bool visible = std::all_of(g_capturePolicies.begin(), g_capturePolicies.end(), [](const auto& entry) { return entry.second.visible; });
+    for (const auto& [bar, windows] : g_capturePolicies) {
+        SetCaptureExclusion(windows.visual, visible);
+        SetCaptureExclusion(windows.input, visible);
+    }
+    Surface::SetCaptureVisible(visible);
+}
 
 // Windows the bar never climbs over: menus, tooltips, the shell's own
 // surfaces, input method windows.
@@ -259,7 +274,7 @@ struct BarDropTarget : winrt::implements<BarDropTarget, IDropTarget> {
     }
 };
 
-Bar::Bar(HINSTANCE instance, bool debugCapturable) : debugCapturable_(debugCapturable)
+Bar::Bar(HINSTANCE instance, bool debugCapturable, std::wstring display) : debugCapturable_(debugCapturable), displayOverride_(std::move(display))
 {
     RegisterClasses(instance);
     wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -286,6 +301,8 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable) : debugCapturable_(debugCaptu
         Log(L"bar: --debug-capturable, Atrium shows in screenshots (with Windows.Graphics.Capture, the backdrop freezes after the first frame)");
     SetCaptureExclusion(visual_, captureVisible_);
     SetCaptureExclusion(input_, captureVisible_);
+    g_capturePolicies[this] = {visual_, input_, debugCapturable_};
+    ApplyCapturePolicies();
 
     // A compact Dock-style label, using the same material and adaptive ink as
     // every other surface. It never takes focus or receives pointer input.
@@ -315,7 +332,6 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable) : debugCapturable_(debugCaptu
     }
 
     // Stacking guard: raised again when covered, hidden behind full-screen apps.
-    g_guard = this;
     hooks_[0] = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, &Bar::WinEvent, 0, 0,
                                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     hooks_[1] = SetWinEventHook(EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND, nullptr, &Bar::WinEvent, 0, 0,
@@ -323,6 +339,8 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable) : debugCapturable_(debugCaptu
     // Maximizing, restoring and entering full screen move the window without a move-size loop.
     hooks_[2] = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, &Bar::WinEvent, 0, 0,
                                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    for (HWINEVENTHOOK hook : hooks_)
+        g_guards[hook] = this;
     SetTimer(input_, kGuardTimer, kGuardMs, nullptr);
 
     render_ = std::thread([this] { RenderThread(); });
@@ -331,10 +349,10 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable) : debugCapturable_(debugCaptu
 Bar::~Bar()
 {
     for (HWINEVENTHOOK h : hooks_)
-        if (h)
+        if (h) {
             UnhookWinEvent(h);
-    if (g_guard == this)
-        g_guard = nullptr;
+            g_guards.erase(h);
+        }
     SetEvent(quit_);
     if (render_.joinable())
         render_.join();
@@ -342,6 +360,8 @@ Bar::~Bar()
         RevokeDragDrop(input_);
     dropTarget_ = nullptr;
     tooltip_.reset();
+    g_capturePolicies.erase(this);
+    ApplyCapturePolicies();
     DestroyWindow(input_);
     DestroyWindow(visual_);
     CloseHandle(wake_);
@@ -380,15 +400,14 @@ LRESULT CALLBACK Bar::VisualProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     auto* self = reinterpret_cast<Bar*>(GetWindowLongPtrW(h, GWLP_USERDATA));
     if (m == WM_DPICHANGED && self) {
-        self->Relayout();
+        PostMessageW(self->input_, WM_BAR_LAYOUT, 0, 0);
         return 0;
     }
     if (m == WM_BAR_CAPTURE && self) {
         // From the render thread: whether Atrium's windows may show in screenshots.
         bool visible = w != 0;
-        SetCaptureExclusion(self->visual_, visible);
-        SetCaptureExclusion(self->input_, visible);
-        Surface::SetCaptureVisible(visible);
+        g_capturePolicies[self].visible = visible;
+        ApplyCapturePolicies();
         SetEvent(self->captureAck_);
         return 0;
     }
@@ -418,7 +437,12 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     switch (m) {
+    case WM_BAR_LAYOUT:
+        layoutPending_ = false;
+        Relayout();
+        return 0;
     case WM_MOUSEACTIVATE: {
+        onInteract();
         // Never take focus from the user's app, except for the logo and the
         // bell: the start menu and the notification list need the keyboard,
         // and only the foreground process may hand the foreground to its own window.
@@ -438,6 +462,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
             onCloseRequest();
         return 0;
     case WM_MOUSEMOVE: {
+        onInteract();
         if (dragging_) {
             UpdateDrag(pt);
             return 0;
@@ -470,6 +495,10 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_TIMER:
+        if (w == kDisplayTimer) {
+            WatchDisplays();
+            return 0;
+        }
         if (w == kTooltipTimer) {
             KillTimer(h, kTooltipTimer);
             if (pressed_.empty() && !dragging_)
@@ -589,6 +618,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     case WM_MOUSEWHEEL: { // over the status icon: the volume
+        onInteract();
         POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         ScreenToClient(h, &p);
         int notches = GET_WHEEL_DELTA_WPARAM(w) / WHEEL_DELTA;
@@ -597,6 +627,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_RBUTTONUP: {
+        onInteract();
         if (dragging_)
             return 0;
         std::wstring key = HitTest(pt);
@@ -670,6 +701,12 @@ void Bar::EndDrag(bool commit)
         TaskItem t = std::move(items_[size_t(from)]);
         items_.erase(items_.begin() + from);
         items_.insert(items_.begin() + dragInsert_, std::move(t));
+        auto shared = std::find_if(allItems_.begin(), allItems_.end(), [&](const TaskItem& item) { return item.key == key; });
+        TaskItem movedItem = std::move(*shared);
+        allItems_.erase(shared);
+        const std::wstring before = dragInsert_ + 1 < int(items_.size()) ? items_[size_t(dragInsert_ + 1)].key : L"";
+        auto insertion = std::find_if(allItems_.begin(), allItems_.end(), [&](const TaskItem& item) { return item.key == before; });
+        allItems_.insert(insertion, std::move(movedItem));
     }
     scene_.hoverKey = moved ? key : scene_.hoverKey;
     Relayout(); // the dropped icon slides from the pointer into its slot
@@ -679,6 +716,7 @@ void Bar::EndDrag(bool commit)
 
 std::wstring Bar::FileDragOver(POINT screen)
 {
+    onInteract();
     POINT pt{screen.x - window_.left, screen.y - window_.top};
     std::wstring key = HitTest(pt);
     if (IsEntry(key))
@@ -704,8 +742,73 @@ void Bar::FileDragLeave()
 
 void Bar::Apply(const Settings& s)
 {
+    const bool changed = settings_.dockDisplayMode != s.dockDisplayMode || settings_.dockDisplay != s.dockDisplay;
     settings_ = s;
+    if (displays_.empty())
+        displays_ = ConnectedDisplays();
+    if (changed)
+        activeDisplay_.clear();
+    summonMonitor_ = nullptr;
+    if (s.dockDisplayMode == L"follow" && displayOverride_.empty())
+        SetTimer(input_, kDisplayTimer, kPointerMs, nullptr);
+    else
+        KillTimer(input_, kDisplayTimer);
     Relayout();
+    UpdateCover(); // the hide mode may have changed
+}
+
+void Bar::RefreshDisplays()
+{
+    displays_ = ConnectedDisplays();
+    ++displayGeneration_; // HMONITOR can be reused after a mode or adapter change.
+    summonMonitor_ = nullptr;
+    if (dragging_)
+        EndDrag(false);
+    Relayout();
+    UpdateCover();
+}
+
+void Bar::WatchDisplays()
+{
+    // Never move a Dock while its icons, a file drop, or a popup are being used.
+    if (!visible_ || dragging_ || pressedLeft_ || !fileHoverKey_.empty() || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ||
+        (keepShown && keepShown()) || (previewOpen && previewOpen())) {
+        summonMonitor_ = nullptr;
+        return;
+    }
+    POINT point{};
+    GetCursorPos(&point);
+    HMONITOR monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+    auto target = std::find_if(displays_.begin(), displays_.end(), [&](const DisplayInfo& d) { return d.monitor == monitor; });
+    // The pointer must stay at the actual bottom edge; screen crossings do not summon the Dock.
+    if (target == displays_.end() || monitor == hmonitor_ || !AtDisplayBottom(point, target->bounds)) {
+        summonMonitor_ = nullptr;
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (summonMonitor_ != monitor) {
+        summonMonitor_ = monitor;
+        summonAt_ = now;
+        return;
+    }
+    if (double(now - summonAt_) < settings_.dockDisplayDelay)
+        return;
+    activeDisplay_ = target->id;
+    summonMonitor_ = nullptr;
+    KillTimer(input_, kSlideTimer);
+    covered_ = revealed_ = tucked_ = slidOut_ = false;
+    scene_.tucked = false;
+    HideTooltip();
+    scene_.hoverKey.clear();
+    scene_.pointerX = -1;
+    SetRegion(false);
+    Relayout();
+    UpdateCover();
+    // A summoned Dock stays visible long enough for the pointer to reach it.
+    revealed_ = true;
+    leftAt_ = now;
+    UpdateAutoHide();
+    Raise();
 }
 
 void Bar::SetItems(std::vector<TaskItem> items)
@@ -719,12 +822,16 @@ void Bar::SetItems(std::vector<TaskItem> items)
                    std::to_wstring(t.iconVersion) + L"\n";
         return sig;
     };
-    bool same = visible(items) == visible(items_);
-    items_ = std::move(items);
-    if (same)
+    bool same = visible(items) == visible(allItems_);
+    allItems_ = std::move(items);
+    if (filterTasks_)
+        same = false; // monitor membership can change without the group's window count changing
+    if (same) {
+        items_ = allItems_;
         UpdateTooltips();
-    else
+    } else {
         Relayout();
+    }
 }
 
 void Bar::SetVisible(bool visible)
@@ -735,14 +842,27 @@ void Bar::SetVisible(bool visible)
 
 void Bar::Relayout()
 {
-    HMONITOR mon = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    const std::wstring id = !displayOverride_.empty() ? displayOverride_ : settings_.dockDisplayMode == L"fixed" ? settings_.dockDisplay :
+                            settings_.dockDisplayMode == L"follow" ? activeDisplay_ : std::wstring();
+    HMONITOR mon = ResolveDisplay(displays_, id);
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(mon, &mi);
+    const bool primary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    filterTasks_ = FilterTasksOnDisplay(settings_.taskbarApps, primary);
+    items_ = TaskItemsForDisplay(allItems_, settings_.taskbarApps, primary, mon, GetAncestor(GetForegroundWindow(), GA_ROOTOWNER),
+        [](HWND window) { return MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST); });
     UINT dpiX = 96, dpiY = 96;
     GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
     const float s = float(dpiX) / 96.f;
+    const bool monitorChanged = hmonitor_ && (hmonitor_ != mon || !EqualRect(&monitor_, &mi.rcMonitor) || scale_ != s);
     const RECT& wa = mi.rcWork;
     const Settings& st = settings_;
+    // Resolve per-display visibility without changing the user's individual switches.
+    const bool showRight = !st.taskbarRightPrimaryOnly || primary;
+    const bool showClock = showRight && st.showClock;
+    const bool showTray = showRight && st.showTray;
+    const bool showStatus = showRight && st.showStatus;
+    const bool showNotifications = showRight && st.showNotifications;
 
     // Metrics (px). Every icon sits centred on a square plate (press and drag
     // feedback); the plate has the same gap `v` to the top and bottom edge,
@@ -759,7 +879,7 @@ void Bar::Relayout()
     // Clock block sized for its widest possible text.
     float timePx = float(barH) * 0.25f, datePx = float(barH) * 0.19f;
     int clockW = 0;
-    if (st.showClock) {
+    if (showClock) {
         std::wstring time, date;
         ClockStrings(time, date);
         float w = std::max(MeasureUiText(dwrite_.get(), WidestDigits(time), timePx, DWRITE_FONT_WEIGHT_SEMI_BOLD),
@@ -770,7 +890,9 @@ void Bar::Relayout()
     // Left to right: [logo] [apps ... (overflow)] | [tray] [status] [clock] [bell].
     // The logo, the overflow entry, the tray and the bell use the same plates
     // as the apps; so does the status ring (battery or volume, Wi-Fi).
-    const int rightCount = int(st.showTray) + int(st.showStatus) + int(st.showNotifications) + int(clockW != 0);
+    // The status entry as three icons (statusStyle) is wider than a plate by about an icon.
+    const int statusExtra = st.statusStyle == L"icons" ? int(std::lround(icon * 1.3f)) : 0;
+    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0);
     const int groupGap = rightCount ? sepGap : 0;
     const int total = int(items_.size());
     int n = total;
@@ -781,7 +903,8 @@ void Bar::Relayout()
         int w = 2 * padFor(p) + p + 2 * g;               // logo and the air after it
         w += slots ? slots * p + (slots - 1) * g : 0;    // apps
         if (rightCount)
-            w += 2 * sepGap + p * (int(st.showTray) + int(st.showStatus) + int(st.showNotifications)) + clockW + (rightCount - 1) * g;
+            w += 2 * sepGap + p * (int(showTray) + int(showStatus) + int(showNotifications)) + (showStatus ? statusExtra : 0) + clockW +
+                 (rightCount - 1) * g;
         return std::max(w, barH * 2);
     };
     // The magnified bar stretches by up to (mag - 1) * range on top of its width.
@@ -805,14 +928,14 @@ void Bar::Relayout()
     // Never narrower than what is always there (logo, overflow, tray, status, clock, bell).
     const int barW = std::max(st.autoWidth ? std::min(contentWidth(n, plate, gap, more), maxW) : maxW, std::min(contentWidth(0, plate, gap, more), screenW));
     const int pad = padFor(plate);
-    const int statusW = plate;
+    const int statusW = plate + statusExtra;
     const int v = (barH - plate) / 2;
     const int pitch = plate + gap;
     const int radius = std::min(Px(st.cornerRadius, s), std::min(barW, barH) / 2);
 
     // Room in the windows around the shape: the shadow everywhere; at the
     // sides half of the magnified stretch (the bar grows on both sides of the
-    // pointer); above, the magnified and hopping icons.
+    // pointer); above, the raised glass and magnified or hopping icons.
     const float range = float(pitch) * 2.3f;
     const int stretch = stretchFor(plate, gap);
     // The window keeps the width of the widest bar the settings allow, and
@@ -823,8 +946,10 @@ void Bar::Relayout()
     const int side = inset + (stretch + 1) / 2 + (stretch ? Px(2, s) : 0);
     const int insetX = side + (roomW - barW) / 2;
     const int lift = std::max(int(std::ceil(float(icon) * (mag - 1))), int(std::ceil(float(icon) * 0.55f)));
-    const int rise = std::max(0, lift - (barH - icon) / 2 + Px(6, s));
-    const int insetTop = std::max(inset, rise);
+    const int glassRise = st.hoverRise ? int(std::ceil(float(icon) * (mag - 1))) : 0;
+    const int rise = std::max(glassRise, lift - (barH - icon) / 2 + Px(6, s));
+    // Keep shadow room above the raised glass, including at maximum magnification.
+    const int insetTop = std::max(inset + glassRise, rise);
 
     const int winW = roomW + 2 * side, winH = barH + insetTop + inset;
     const int x = wa.left + (wa.right - wa.left - winW) / 2;
@@ -868,6 +993,7 @@ void Bar::Relayout()
     scene.dragKey = dragging_ ? dragKey_ : std::wstring();
     scene.magnify = mag;
     scene.magnifyRange = range;
+    scene.magnifyLift = st.hoverRise ? float(icon) * (mag - 1) : 0;
     // Keep the pointer and the ripple; only the geometry changes. The pointer
     // moves with the window if it was rebuilt at another x.
     scene.pointerX = scene_.pointerX < 0 ? -1 : scene_.pointerX + float(window_.left - x);
@@ -900,10 +1026,10 @@ void Bar::Relayout()
         cursor -= gap;
         return left;
     };
-    const int bellLeft = rightSlot(plate, st.showNotifications);
+    const int bellLeft = rightSlot(plate, showNotifications);
     const int clockLeft = rightSlot(clockW, clockW != 0), clockRight = clockLeft + clockW;
-    const int statusLeft = rightSlot(statusW, st.showStatus), statusRight = statusLeft + statusW;
-    const int trayLeft = rightSlot(plate, st.showTray);
+    const int statusLeft = rightSlot(statusW, showStatus), statusRight = statusLeft + statusW;
+    const int trayLeft = rightSlot(plate, showTray);
     const int rightLeft = rightCount ? cursor + gap : insetX + barW - pad;
     const int appsMin = startLeft + plate + 2 * gap;
     const int slots = n + (more ? 1 : 0);
@@ -964,11 +1090,11 @@ void Bar::Relayout()
     gap_ = gap;
     shown_ = n;
     scene.separatorX = rightCount ? float(rightLeft - sepGap) : -1;
-    if (st.showTray) {
+    if (showTray) {
         scene.extras.push_back(entry(kTrayKey, trayLeft, L"\uE70E"));
         hits_.push_back({kTrayKey, RECT{trayLeft - gap / 2, hitTop, trayLeft + plate + gap / 2, hitBottom}});
     }
-    if (st.showStatus) {
+    if (showStatus) {
         SceneItem status = entry(kStatusKey, statusLeft, L"");
         status.plate = D2D1::RectF(float(statusLeft), plateTop, float(statusRight), plateTop + float(plate));
         status.icon = D2D1::RectF(float(statusLeft), iconTop, float(statusRight), iconTop + float(icon));
@@ -976,13 +1102,14 @@ void Bar::Relayout()
         hits_.push_back({kStatusKey, RECT{statusLeft - gap / 2, hitTop, statusRight + gap / 2, hitBottom}});
     }
     scene.status = status_;
+    scene.statusIcons = st.statusStyle == L"icons";
     if (clockW) {
         scene.clock = D2D1::RectF(float(clockLeft), plateTop, float(clockRight), plateTop + float(plate));
         scene.timePx = timePx;
         scene.datePx = datePx;
         hits_.push_back({kClockKey, RECT{clockLeft - gap / 2, hitTop, clockRight + gap / 2, hitBottom}});
     }
-    if (st.showNotifications) {
+    if (showNotifications) {
         SceneItem bell = entry(kNotifyKey, bellLeft, L"\uEA8F");
         bell.badge = unread_;
         scene.extras.push_back(std::move(bell));
@@ -1014,6 +1141,9 @@ void Bar::Relayout()
     SetRegion(regionExtended_);
     UpdateTooltips();
     Publish();
+    if (monitorChanged)
+        onMonitorChanged();
+    onItemsChanged();
 }
 
 void Bar::SetRegion(bool extended)
@@ -1027,7 +1157,7 @@ void Bar::SetRegion(bool extended)
     HRGN rgn = ContinuousRegion(RECT{insetX_, insetTop_, insetX_ + barW + 1, insetTop_ + barH + 1}, radius_);
     if (ext > 0) {
         // While the pointer is on the bar, the room above it belongs to the
-        // magnified icons (clicks there go to the icon below the pointer).
+        // raised glass and icons (clicks go to the icon below the pointer).
         HRGN top = CreateRectRgn(insetX_ + radius_ / 2, insetTop_ - ext, insetX_ + barW - radius_ / 2, insetTop_ + radius_);
         CombineRgn(rgn, rgn, top, RGN_OR);
         DeleteObject(top);
@@ -1039,6 +1169,17 @@ void Bar::SetRegion(bool extended)
     appliedRgn_[3] = insetX_;
     appliedRgn_[4] = insetTop_;
     appliedRgn_[5] = ext;
+}
+
+void Bar::ActivateIndex(int index)
+{
+    if (index < 0 || index >= int(items_.size()) || !onActivate)
+        return;
+    const TaskItem& t = items_[size_t(index)];
+    Log(L"bar: app %d by the keyboard (%s)", index + 1, t.name.c_str());
+    if (t.windows.empty())
+        Bounce(t.key);
+    onActivate(std::wstring(t.key)); // the copy: activating may change the items
 }
 
 void Bar::Bounce(const std::wstring& key)
@@ -1062,50 +1203,73 @@ void Bar::SetPanel(const GlassPanel& panel)
     Publish(false);
 }
 
-void CALLBACK Bar::WinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD)
+void CALLBACK Bar::WinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD)
 {
-    if (!g_guard || idObject != OBJID_WINDOW || idChild != CHILDID_SELF)
+    auto found = g_guards.find(hook);
+    if (found == g_guards.end() || idObject != OBJID_WINDOW || idChild != CHILDID_SELF)
         return;
-    if (event == EVENT_OBJECT_LOCATIONCHANGE) { // only the foreground app's own window matters
-        if (hwnd == GetForegroundWindow())
-            g_guard->UpdateCover();
+    Bar* bar = found->second;
+    if (event == EVENT_OBJECT_LOCATIONCHANGE) {
+        if (bar->filterTasks_ && !bar->layoutPending_) {
+            const bool known = std::any_of(bar->allItems_.begin(), bar->allItems_.end(), [&](const TaskItem& item) {
+                return std::find(item.windows.begin(), item.windows.end(), hwnd) != item.windows.end();
+            });
+            const bool shown = std::any_of(bar->items_.begin(), bar->items_.end(), [&](const TaskItem& item) {
+                return std::find(item.windows.begin(), item.windows.end(), hwnd) != item.windows.end();
+            });
+            if (known && shown != (MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == bar->hmonitor_)) {
+                bar->layoutPending_ = true;
+                PostMessageW(bar->input_, WM_BAR_LAYOUT, 0, 0);
+            }
+        }
+        if (hwnd == GetForegroundWindow() || MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == bar->hmonitor_)
+            bar->UpdateCover();
         return;
     }
-    g_guard->GuardStacking(event == EVENT_SYSTEM_FOREGROUND ? L"foreground" : L"move");
+    if (bar->settings_.taskbarApps != L"all")
+        bar->Relayout();
+    bar->GuardStacking(event == EVENT_SYSTEM_FOREGROUND ? L"foreground" : L"move");
 }
 
-// The app in front fills the bar's monitor: maximized there (the system
-// taskbar auto-hides, so maximized windows reach the bottom too) or covering
-// the whole monitor (full screen). Never the desktop or Atrium itself.
-bool Bar::ForegroundCoversScreen() const
+// Focus may be on another screen; use this monitor's app Z-order instead.
+bool Bar::MonitorCoveredByApp() const
 {
-    HWND fg = GetForegroundWindow();
-    if (!fg)
-        return false;
-    fg = GetAncestor(fg, GA_ROOT);
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    if (pid == GetCurrentProcessId() || IsIconic(fg) || !IsWindowVisible(fg))
-        return false;
-    wchar_t cls[64] = {};
-    GetClassNameW(fg, cls, 64);
-    for (const wchar_t* c : {L"Progman", L"WorkerW", L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd"})
-        if (wcscmp(cls, c) == 0)
-            return false;
-    BOOL cloaked = FALSE;
-    DwmGetWindowAttribute(fg, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-    if (cloaked || MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != hmonitor_)
-        return false;
-    if (IsZoomed(fg))
-        return true;
-    RECT r{};
-    GetWindowRect(fg, &r);
-    return r.left <= monitor_.left && r.top <= monitor_.top && r.right >= monitor_.right && r.bottom >= monitor_.bottom;
+    for (HWND window = GetTopWindow(nullptr); window; window = GetWindow(window, GW_HWNDNEXT)) {
+        if (!IsWindowVisible(window) || IsIconic(window))
+            continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(window, &pid);
+        const HMONITOR windowMonitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        if (pid == GetCurrentProcessId() || windowMonitor != hmonitor_)
+            continue;
+        const LONG_PTR ex = GetWindowLongPtrW(window, GWL_EXSTYLE);
+        if (!(ex & WS_EX_APPWINDOW) && ((ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) || GetWindow(window, GW_OWNER)))
+            continue; // transient UI must not reveal a bar over a full-screen app
+        if ((ex & WS_EX_TRANSPARENT) && (ex & WS_EX_LAYERED))
+            continue;
+        BOOL cloaked = FALSE;
+        DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+        if (cloaked)
+            continue; // windows on another virtual desktop do not cover this one
+        wchar_t cls[64] = {};
+        GetClassNameW(window, cls, 64);
+        if (wcscmp(cls, L"Shell_TrayWnd") == 0 || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0 ||
+            wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0)
+            continue;
+        RECT frame{};
+        if (!GetWindowRect(window, &frame))
+            continue;
+        if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_))
+            return *covered; // a normal app in front of a full-screen one restores the bar
+    }
+    return false;
 }
 
 void Bar::UpdateCover()
 {
-    bool covered = ForegroundCoversScreen();
+    // Apply the hide mode independently on each display.
+    const std::wstring& mode = settings_.autoHide;
+    bool covered = mode == L"always" || (mode != L"never" && MonitorCoveredByApp());
     if (covered == covered_)
         return;
     covered_ = covered;
@@ -1115,9 +1279,10 @@ void Bar::UpdateCover()
     RECT bar = BarRect(), zone{bar.left, window_.top, bar.right, monitor_.bottom};
     revealed_ = covered && !slidOut_ && PtInRect(&zone, p);
     leftAt_ = 0;
-    wchar_t cls[64] = {};
-    GetClassNameW(GetForegroundWindow(), cls, 64);
-    Log(L"bar: %s (%s)", covered ? L"a maximized or full-screen app is in front: auto-hide" : L"no maximized or full-screen app in front", cls);
+    if (mode == L"fullscreen")
+        Log(L"bar: monitor %p %s", hmonitor_, covered ? L"covered by its top app: auto-hide" : L"not covered by its top app");
+    else
+        Log(L"bar: auto-hide %s (%s)", covered ? L"always" : L"never", mode.c_str());
     if (covered)
         SetTimer(input_, kPointerTimer, kPointerMs, nullptr);
     else
@@ -1161,7 +1326,7 @@ void Bar::WatchPointer()
     RECT bar = BarRect();
     if (!revealed_) {
         // The bottom edge of the screen, below the bar.
-        if (p.y >= monitor_.bottom - 2 && p.x >= bar.left && p.x < bar.right) {
+        if (AtDisplayBottom(p, monitor_) && p.x >= bar.left && p.x < bar.right) {
             revealed_ = true;
             leftAt_ = 0;
             UpdateAutoHide();
@@ -1460,6 +1625,7 @@ void Bar::Publish(bool bar)
         snapshot_.window = window_;
         snapshot_.monitor = monitor_;
         snapshot_.hmonitor = hmonitor_;
+        snapshot_.displayGeneration = displayGeneration_;
         snapshot_.scale = scale_;
         snapshot_.visible = visible_ && !slidOut_;
         snapshot_.panels.clear();
@@ -1520,6 +1686,8 @@ bool Bar::RenderSession()
     }
 
     Gpu gpu = Gpu::ForMonitor(snap.hmonitor);
+    const HMONITOR captureMonitor = snap.hmonitor;
+    const unsigned captureGeneration = snap.displayGeneration;
     // The backdrop: Desktop Duplication, which leaves Atrium's windows out by
     // itself (so screenshots may show them); else Windows.Graphics.Capture
     // with Atrium kept out of every capture.
@@ -1597,6 +1765,14 @@ bool Bar::RenderSession()
         std::vector<GlassParams> params;
     };
     std::map<HWND, PanelState> panels;
+    struct PanelCapture {
+        std::unique_ptr<BackdropSource> source;
+        winrt::com_ptr<ID3D11Texture2D> texture;
+        RECT bounds{};
+        bool fresh = false;
+    };
+    std::map<HMONITOR, PanelCapture> panelCaptures;
+    bool mayShowInCapture = capture->KeepsOwnWindowsOut();
     double slowLogged = -1e9;
     uint64_t tick = 1; // compositor frames (every wake-up when not paced by the clock)
     // A panel that moves (a widget dragged or gliding) needs the backdrop at
@@ -1633,6 +1809,58 @@ bool Bar::RenderSession()
     std::vector<GlassParams> gp;
     // Draws the panels; true while one of them animates.
     auto renderPanels = [&](const Snapshot& snap, ID3D11Texture2D* source, bool& lost) {
+        // A menu or Stage Manager can remain on a different display from the Dock.
+        std::erase_if(panelCaptures, [&](const auto& entry) {
+            return std::none_of(snap.panels.begin(), snap.panels.end(), [&](const GlassPanel& p) {
+                return !p.desktop && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) == entry.first;
+            });
+        });
+        for (const GlassPanel& p : snap.panels) {
+            HMONITOR monitor = MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST);
+            if (p.desktop || monitor == captureMonitor || panelCaptures.contains(monitor))
+                continue;
+            PanelCapture& extra = panelCaptures[monitor];
+            MONITORINFO info{sizeof(info)};
+            GetMonitorInfoW(monitor, &info);
+            extra.bounds = info.rcMonitor;
+            HRESULT why = S_OK;
+            bool elsewhere = false;
+            extra.source = DuplicationCapture::Create(gpu, monitor, frame_, why, elsewhere);
+            if (!extra.source) {
+                ShowOwnWindowsToCapture(false);
+                mayShowInCapture = false;
+                extra.source = std::make_unique<MonitorCapture>(gpu, monitor, frame_);
+            }
+        }
+        const bool canShow = capture->KeepsOwnWindowsOut() && std::all_of(panelCaptures.begin(), panelCaptures.end(),
+            [](const auto& entry) { return entry.second.source->KeepsOwnWindowsOut(); });
+        if (canShow != mayShowInCapture) {
+            ShowOwnWindowsToCapture(canShow);
+            mayShowInCapture = canShow;
+        }
+        for (auto& [monitor, extra] : panelCaptures) {
+            ID3D11Texture2D* frame = extra.source->Acquire();
+            if (extra.source->Lost()) {
+                lost = true;
+                return false;
+            }
+            extra.fresh = frame && !(debugCapturable_ && extra.texture);
+            if (extra.fresh) {
+                D3D11_TEXTURE2D_DESC desc{}, previous{};
+                frame->GetDesc(&desc);
+                if (extra.texture)
+                    extra.texture->GetDesc(&previous);
+                if (!extra.texture || previous.Width != desc.Width || previous.Height != desc.Height || previous.Format != desc.Format) {
+                    extra.texture = nullptr;
+                    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                    desc.MiscFlags = desc.CPUAccessFlags = 0;
+                    desc.Usage = D3D11_USAGE_DEFAULT;
+                    winrt::check_hresult(gpu.device->CreateTexture2D(&desc, nullptr, extra.texture.put()));
+                }
+                gpu.context->CopyResource(extra.texture.get(), frame);
+            }
+            extra.source->Release();
+        }
         for (auto it = panels.begin(); it != panels.end();) {
             bool listed = std::any_of(snap.panels.begin(), snap.panels.end(), [&](const GlassPanel& p) { return p.hwnd == it->first; });
             it = listed ? std::next(it) : panels.erase(it);
@@ -1661,6 +1889,7 @@ bool Bar::RenderSession()
             int w = p.window.right - p.window.left, h = p.window.bottom - p.window.top;
             if (w <= 0 || h <= 0 || !IsWindow(p.hwnd))
                 continue;
+            const float panelScale = float(GetDpiForWindow(p.hwnd)) / 96.f;
             PanelState& ps = panels.try_emplace(p.hwnd, p.hwnd).first->second;
             const int bufferW = std::max(w, p.bufferW), bufferH = std::max(h, p.bufferH);
             const double t0 = ClockMs();
@@ -1704,10 +1933,14 @@ bool Bar::RenderSession()
                     newDesktop = fresh;
                     ps.desktopVersion = desktop.Version();
                 }
+            } else if (auto extra = panelCaptures.find(MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST)); extra != panelCaptures.end()) {
+                const auto& picture = extra->second;
+                if (picture.texture && (picture.fresh || moved || !r.HasBackdrop()))
+                    r.UpdateBackdrop(picture.texture.get(), p.window.left - picture.bounds.left, p.window.top - picture.bounds.top);
             } else if (ID3D11Texture2D* below = source ? source : (moved || !r.HasBackdrop()) ? lastFrame.get() : nullptr) {
                 r.UpdateBackdrop(below, p.window.left - snap.monitor.left, p.window.top - snap.monitor.top);
             }
-            PanelParams(snap.settings, snap.scale, p, gp);
+            PanelParams(snap.settings, panelScale, p, gp);
             if (auto rb = r.Poll()) {
                 changed |= rb->changed;
                 under = rb->changed;
@@ -1715,7 +1948,7 @@ bool Bar::RenderSession()
                 // the glass shows there, each cell with the bar's hysteresis;
                 // the popup's own ink is what most of it needs.
                 const float padX = float(rb->origin.x), padY = float(rb->origin.y);
-                const float cell = std::max(8.f, 20.f * snap.scale);
+                const float cell = std::max(8.f, 20.f * panelScale);
                 InkGrid grid;
                 grid.w = std::max(1, int(std::ceil(float(w) / cell)));
                 grid.h = std::max(1, int(std::ceil(float(h) / cell)));
@@ -1890,8 +2123,8 @@ bool Bar::RenderSession()
         ID3D11Texture2D* frame = capture->Acquire();
         if (capture->Lost())
             return true; // a new source (display mode change, secure desktop)
-        if (snap.hmonitor != MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY))
-            return true; // primary monitor changed: new device and capture
+        if (snap.hmonitor != captureMonitor || snap.displayGeneration != captureGeneration)
+            return true; // selected display or its capture source changed
         if (!snap.visible) {
             // Retire the bar's reads even while hidden. Otherwise its last pending
             // slot keeps the idle loop waking every 3 ms until the bar is revealed.
@@ -2033,6 +2266,9 @@ bool Bar::RenderSession()
         params.rippleY = bf.rippleY;
         params.rippleR = bf.rippleR;
         params.rippleA = bf.rippleA;
+        params.waveX = bf.waveX;
+        params.waveWidth = bf.waveWidth;
+        params.waveHeight = bf.waveHeight;
         bool ok = renderer.Present(params,
                                    [&](ID2D1DeviceContext2* d2d) {
                                        painter.Draw(d2d, snap.scene, inks, time, date,

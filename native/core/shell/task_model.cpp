@@ -6,6 +6,7 @@
 // results under `mutex_` and posts a registered message to the UI window.
 
 #include "shell/task_model.h"
+#include "shell/app_processes.h"
 
 #include "log.h"
 
@@ -573,6 +574,7 @@ struct IconEntry {
 struct Meta {
     std::wstring aumid, pinPath, exePath;
     std::vector<HWND> hwnds;
+    std::vector<AppProcessIdentity> processTargets; // retained for pinned apps closed to the tray
     std::wstring Signature() const { return aumid + L"|" + pinPath + L"|" + exePath; }
 };
 
@@ -945,12 +947,23 @@ struct TaskModel::Impl {
             if (m.aumid.empty())
                 m.aumid = r->info.aumid;
             m.hwnds.push_back(r->hwnd);
+            if (std::none_of(m.processTargets.begin(), m.processTargets.end(), [&](const AppProcessIdentity& target) {
+                    return target.exePath == r->info.exePath && target.aumid == r->info.aumid;
+                }))
+                m.processTargets.push_back({r->info.exePath, r->info.aumid});
             if (it->second >= pinCount) {
                 running.insert(key);
                 auto f = firstSeen.find(key);
                 if (f == firstSeen.end() || (r->info.created && r->info.created < f->second))
                     firstSeen[key] = r->info.created;
             }
+        }
+
+        // A shortcut may point to a launcher; retain the actual app identity after it hides.
+        for (auto& [key, value] : newMeta) {
+            const auto previous = meta.find(key);
+            if (value.processTargets.empty() && previous != meta.end())
+                value.processTargets = previous->second.processTargets;
         }
 
         // Unpinned groups: keep first-seen order, append new ones by process start.
@@ -1351,11 +1364,13 @@ struct TaskModel::Impl {
             SwitchToThisWindow(target, TRUE);
     }
 
-    void Activate(const std::wstring& key)
+    void Activate(const std::wstring& key, HMONITOR monitor)
     {
         const TaskItem* t = Find(key);
         auto windows = t ? t->windows : std::vector<HWND>{};
         std::erase_if(windows, [](HWND h) { return !IsWindowVisible(h); });
+        if (monitor)
+            std::erase_if(windows, [&](HWND h) { return MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) != monitor; });
         if (windows.empty()) {
             Launch(key);
             return;
@@ -1381,6 +1396,17 @@ struct TaskModel::Impl {
             return;
         for (HWND h : t->windows)
             PostMessageW(h, WM_CLOSE, 0, 0);
+    }
+
+    std::vector<AppProcessIdentity> TerminationTargets(const std::wstring& key) const
+    {
+        const auto found = meta.find(key);
+        if (found == meta.end())
+            return {};
+        if (!found->second.processTargets.empty())
+            return found->second.processTargets;
+        // Pinned apps can keep running in the tray after their last window closes.
+        return {{found->second.exePath, found->second.aumid}};
     }
 
     PinnedApp PinFor(const std::wstring& key) const
@@ -1599,10 +1625,10 @@ IconImage TaskModel::Icon(const std::wstring& key, int sizePx)
     }
 }
 
-void TaskModel::Activate(const std::wstring& key)
+void TaskModel::Activate(const std::wstring& key, HMONITOR monitor)
 {
     try {
-        impl_->Activate(key);
+        impl_->Activate(key, monitor);
     } catch (...) {
         Log(L"tasks: Activate failed");
     }
@@ -1643,6 +1669,23 @@ void TaskModel::CloseAll(const std::wstring& key)
         impl_->CloseAll(key);
     } catch (...) {
         Log(L"tasks: CloseAll failed");
+    }
+}
+
+bool TaskModel::CanTerminate(const std::wstring& key) const
+{
+    const auto targets = impl_->TerminationTargets(key);
+    return std::any_of(targets.begin(), targets.end(), CanTerminateApp);
+}
+
+void TaskModel::Terminate(const std::wstring& key)
+{
+    try {
+        const auto targets = impl_->TerminationTargets(key);
+        TerminateAppProcesses(targets);
+        impl_->MarkDirty();
+    } catch (...) {
+        Log(L"tasks: Terminate failed");
     }
 }
 

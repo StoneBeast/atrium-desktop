@@ -87,11 +87,14 @@ public:
     // Left click, like the Windows taskbar: no window -> launch; one window ->
     // minimize if it is the foreground window, otherwise restore and activate;
     // several windows -> activate the next one in turn.
-    void Activate(const std::wstring& key);
+    void Activate(const std::wstring& key, HMONITOR monitor = nullptr); // monitor restricts cycling to this taskbar's windows
     // Middle click / "new window": start another instance.
     void Launch(const std::wstring& key);
     // Politely close every window of the group (WM_CLOSE).
     void CloseAll(const std::wstring& key);
+    // End the entire application, including tray processes and child helpers.
+    bool CanTerminate(const std::wstring& key) const;
+    void Terminate(const std::wstring& key);
     // One window of a group (the window previews): restore and bring it to the front, or close it.
     static void ActivateWindow(HWND window);
     // True means the native close command was queued; the application still

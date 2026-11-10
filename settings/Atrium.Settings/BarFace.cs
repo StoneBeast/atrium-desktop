@@ -38,6 +38,7 @@ internal sealed class BarFace
     private readonly TextBlock _badgeText = new() { Text = "3", Foreground = new SolidColorBrush(Colors.White), HorizontalAlignment = HorizontalAlignment.Center,
                                                     VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
     private readonly StatusGlyph _status = new();
+    private readonly StatusIcons _statusIcons = new();
     private readonly TextBlock _time = Clock(true), _date = Clock(false), _timeHalo = Clock(true), _dateHalo = Clock(false);
     private (MainWindow.BarGeometry Geometry, bool Dark, int Apps, int Running, double Magnify, double Zoom, double X, double Y,
              (double Fill, bool Charging, bool Low) Battery)? _layout;
@@ -65,7 +66,7 @@ internal sealed class BarFace
             _dots.Add(dot);
             canvas.Children.Add(dot);
         }
-        foreach (var e in new UIElement[] { _sep, _tray, _status, _timeHalo, _dateHalo, _time, _date, _bell, _badge }) canvas.Children.Add(e);
+        foreach (var e in new UIElement[] { _sep, _tray, _status, _statusIcons, _timeHalo, _dateHalo, _time, _date, _bell, _badge }) canvas.Children.Add(e);
     }
 
     public IReadOnlyList<Image> Icons => _icons;
@@ -231,13 +232,19 @@ internal sealed class BarFace
             Canvas.SetTop(_badge, y + d * 0.15 - d / 2);
         }
 
-        _status.Visibility = L.StatusX < 0 ? Visibility.Collapsed : Visibility.Visible;
+        bool icons = L.StatusExtra > 0;
+        _status.Visibility = L.StatusX < 0 || icons ? Visibility.Collapsed : Visibility.Visible;
+        _statusIcons.Visibility = L.StatusX < 0 || !icons ? Visibility.Collapsed : Visibility.Visible;
         if (L.StatusX >= 0)
         {
-            var (x, y, size) = Item(L.StatusX);
-            _status.Update(size, inkColor, battery.Fill, battery.Charging, battery.Low, 3, !HasBattery());
-            Canvas.SetLeft(_status, x);
-            Canvas.SetTop(_status, y);
+            // The three icons are centred on the wider entry (an icon square drawn past its sides).
+            var (x, y, size) = Item(L.StatusX + L.StatusExtra / 2);
+            if (icons)
+                _statusIcons.Update(size, inkColor, battery.Fill, battery.Charging, battery.Low, !HasBattery());
+            else
+                _status.Update(size, inkColor, battery.Fill, battery.Charging, battery.Low, 3, !HasBattery());
+            Canvas.SetLeft(icons ? _statusIcons : _status, x);
+            Canvas.SetTop(icons ? _statusIcons : _status, y);
         }
 
         // The clock: moves with the stretched bar, does not grow; time 25 %, date 19 % of the bar's
@@ -359,5 +366,96 @@ internal sealed class StatusGlyph : Canvas
         _arc2.Data = Arc(cx, oy, 0.905 * R, From, Span);
         _arc2.Stroke = lit >= 3 ? on : off;
         _arc2.StrokeThickness = 0.19 * R;
+    }
+}
+
+// The status entry as the Windows taskbar shows it (BarPainter::DrawStatusIcons), centred on an
+// h x h square and wider than it: the Wi-Fi fan, the speaker with its waves, the battery.
+internal sealed class StatusIcons : Canvas
+{
+    private readonly Path _wedge = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
+    private readonly Path _arc1 = Stroke(), _arc2 = Stroke(), _cone = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
+    private readonly Path[] _waves = { Stroke(), Stroke(), Stroke() };
+    private readonly Path _body = new() { IsHitTestVisible = false }, _nub = new() { IsHitTestVisible = false }, _fill = new() { IsHitTestVisible = false };
+
+    public StatusIcons()
+    {
+        IsHitTestVisible = false;
+        foreach (var p in new[] { _wedge, _arc1, _arc2, _cone, _waves[0], _waves[1], _waves[2], _body, _nub, _fill }) Children.Add(p);
+    }
+
+    private static Path Stroke() => new() { IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
+
+    private static Point At(double cx, double cy, double r, double deg) =>
+        new(cx + r * Math.Cos(deg * Math.PI / 180), cy + r * Math.Sin(deg * Math.PI / 180));
+
+    private static PathGeometry Arc(double cx, double cy, double r, double from, double sweep)
+    {
+        var f = new PathFigure { StartPoint = At(cx, cy, r, from), IsClosed = false, IsFilled = false };
+        f.Segments.Add(new ArcSegment { Point = At(cx, cy, r, from + sweep), Size = new Size(r, r), SweepDirection = SweepDirection.Clockwise });
+        return new PathGeometry { Figures = { f } };
+    }
+
+    private static PathGeometry Polygon(params Point[] pts)
+    {
+        var f = new PathFigure { StartPoint = pts[0], IsClosed = true, IsFilled = true };
+        for (int i = 1; i < pts.Length; i++) f.Segments.Add(new LineSegment { Point = pts[i] });
+        return new PathGeometry { Figures = { f } };
+    }
+
+    private static Color Fade(Color c, double a) => Color.FromArgb((byte)Math.Round(c.A * a), c.R, c.G, c.B);
+
+    public void Update(double h, Color ink, double fill, bool charging, bool low, bool desktop)
+    {
+        Width = Height = h;
+        double cy = h / 2, stroke = Math.Max(0.75, h * 0.075);
+        double netW = 0.62 * h, speakerW = 0.60 * h, batteryW = 0.68 * h, gap = 0.18 * h;
+        double x = h / 2 - (netW + speakerW + gap + (desktop ? 0 : batteryW + gap)) / 2;
+        var on = new SolidColorBrush(ink);
+        var off = new SolidColorBrush(Fade(ink, 0.24));
+
+        // The fan (wifi_glyph.cpp), fully lit: 46 % of the square high, its point half a radius below the middle.
+        double R = 0.46 * h, cx = x + netW / 2, oy = cy + 0.5 * R;
+        const double Span = 78, From = 270 - Span / 2;
+        double r0 = 0.37 * R;
+        var wedge = new PathFigure { StartPoint = new Point(cx, oy), IsClosed = true, IsFilled = true };
+        wedge.Segments.Add(new LineSegment { Point = At(cx, oy, r0, From) });
+        wedge.Segments.Add(new ArcSegment { Point = At(cx, oy, r0, From + Span), Size = new Size(r0, r0), SweepDirection = SweepDirection.Clockwise });
+        _wedge.Data = new PathGeometry { Figures = { wedge } };
+        _wedge.Fill = _wedge.Stroke = on;
+        _wedge.StrokeThickness = 0.19 * 0.3 * R;
+        _arc1.Data = Arc(cx, oy, 0.595 * R, From, Span);
+        _arc2.Data = Arc(cx, oy, 0.905 * R, From, Span);
+        _arc1.Stroke = _arc2.Stroke = on;
+        _arc1.StrokeThickness = _arc2.StrokeThickness = 0.19 * R;
+        x += netW + gap;
+
+        // The speaker: a cone, two of three waves lit.
+        _cone.Data = Polygon(new Point(x, cy - 0.10 * h), new Point(x + 0.11 * h, cy - 0.10 * h), new Point(x + 0.25 * h, cy - 0.22 * h),
+                             new Point(x + 0.25 * h, cy + 0.22 * h), new Point(x + 0.11 * h, cy + 0.10 * h), new Point(x, cy + 0.10 * h));
+        _cone.Fill = _cone.Stroke = on;
+        _cone.StrokeThickness = stroke * 0.6;
+        for (int i = 0; i < 3; i++)
+        {
+            double r = (0.11 + 0.105 * i) * h;
+            _waves[i].Data = Arc(x + 0.25 * h, cy, r, -43, 86);
+            _waves[i].Stroke = i < 2 ? on : off;
+            _waves[i].StrokeThickness = stroke;
+        }
+        x += speakerW + gap;
+
+        // The battery: an outline, its nub, the level (red when low).
+        foreach (var p in new[] { _body, _nub, _fill }) p.Visibility = desktop ? Visibility.Collapsed : Visibility.Visible;
+        if (desktop) return;
+        double bw = 0.58 * h, bh = 0.36 * h;
+        var body = new Rect(x + stroke / 2, cy - bh / 2, bw - stroke / 2, bh);
+        _body.Data = new RectangleGeometry { Rect = body };
+        _body.Stroke = new SolidColorBrush(Fade(ink, 0.9));
+        _body.StrokeThickness = stroke;
+        _nub.Data = new RectangleGeometry { Rect = new Rect(body.Right + 0.03 * h, cy - 0.075 * h, 0.05 * h, 0.15 * h) };
+        _nub.Fill = new SolidColorBrush(Fade(ink, 0.9));
+        double pad = stroke + 0.035 * h, inner = body.Width - 2 * pad;
+        _fill.Data = new RectangleGeometry { Rect = new Rect(body.Left + pad, body.Top + pad, Math.Max(0.06 * h, inner * Math.Clamp(fill, 0, 1)), body.Height - 2 * pad) };
+        _fill.Fill = low && !charging ? new SolidColorBrush(ink.R < 128 ? Color.FromArgb(255, 0xE0, 0x35, 0x2B) : Color.FromArgb(255, 0xFF, 0x45, 0x3A)) : on;
     }
 }

@@ -13,7 +13,7 @@
 // so that a restart picks them up again; turning Stage Manager off or quitting Atrium brings them
 // all back.
 //
-// Only the bar's monitor is managed. Always shown, the strip steps aside while a window on the stage
+// Only the selected desktop display is managed. Always shown, the strip steps aside while a window on the stage
 // covers its place; auto-hidden, it only comes out while the pointer rests on that edge of the screen.
 #pragma once
 
@@ -43,7 +43,7 @@ public:
     bool Enabled() const { return enabled_; }
     void SetOnRight(bool onRight);
     void SetAutoHide(bool autoHide);
-    void SetMonitor(HMONITOR monitor);
+    void SetMonitor(HMONITOR monitor, bool refresh = false);
     // The task model changed (every group, also those the bar does not show).
     void Update(const std::vector<TaskItem>& items);
     // Everything put away comes back (on exit).

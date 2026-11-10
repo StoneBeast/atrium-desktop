@@ -41,9 +41,20 @@ void Settings::Clamp()
     c(iconSize, 16, 64, d.iconSize);
     c(magnify, 1, 2, d.magnify);
     c(notifyTimeout, 3, 30, d.notifyTimeout);
+    c(dockDisplayDelay, 100, 2000, d.dockDisplayDelay);
     tint &= 0xFFFFFF;
     if (textColor != L"light" && textColor != L"dark")
         textColor = L"auto";
+    if (autoHide != L"never" && autoHide != L"always")
+        autoHide = L"fullscreen";
+    if (statusStyle != L"icons")
+        statusStyle = L"ring";
+    if (dockDisplayMode != L"primary" && dockDisplayMode != L"fixed" && dockDisplayMode != L"all")
+        dockDisplayMode = L"follow";
+    if (taskbarApps != L"primaryAndWindow" && taskbarApps != L"window")
+        taskbarApps = L"all";
+    if (notifyPlacement != L"topRight")
+        notifyPlacement = L"dock";
     if (pins && pins->size() > 64)
         pins->resize(64);
     if (preset != L"liquid" && preset != L"frosted")
@@ -72,6 +83,7 @@ std::wstring Settings::ToJson() const
     num(L"margin", margin);
     num(L"iconSize", iconSize);
     num(L"magnify", magnify);
+    o.SetNamedValue(L"hoverRise", json::JsonValue::CreateBooleanValue(hoverRise));
     o.SetNamedValue(L"showClock", json::JsonValue::CreateBooleanValue(showClock));
     o.SetNamedValue(L"showTray", json::JsonValue::CreateBooleanValue(showTray));
     o.SetNamedValue(L"showStatus", json::JsonValue::CreateBooleanValue(showStatus));
@@ -79,7 +91,16 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"autoWidth", json::JsonValue::CreateBooleanValue(autoWidth));
     o.SetNamedValue(L"showRunning", json::JsonValue::CreateBooleanValue(showRunning));
     o.SetNamedValue(L"textColor", json::JsonValue::CreateStringValue(textColor));
+    o.SetNamedValue(L"autoHide", json::JsonValue::CreateStringValue(autoHide));
+    o.SetNamedValue(L"statusStyle", json::JsonValue::CreateStringValue(statusStyle));
+    o.SetNamedValue(L"dockDisplayMode", json::JsonValue::CreateStringValue(dockDisplayMode));
+    num(L"dockDisplayDelay", dockDisplayDelay);
+    o.SetNamedValue(L"dockDisplay", json::JsonValue::CreateStringValue(dockDisplay));
+    o.SetNamedValue(L"desktopDisplay", json::JsonValue::CreateStringValue(desktopDisplay));
+    o.SetNamedValue(L"taskbarApps", json::JsonValue::CreateStringValue(taskbarApps));
+    o.SetNamedValue(L"taskbarRightPrimaryOnly", json::JsonValue::CreateBooleanValue(taskbarRightPrimaryOnly));
     num(L"notifyTimeout", notifyTimeout);
+    o.SetNamedValue(L"notifyPlacement", json::JsonValue::CreateStringValue(notifyPlacement));
     o.SetNamedValue(L"notifyHideBody", json::JsonValue::CreateBooleanValue(notifyHideBody));
     o.SetNamedValue(L"notifyListener", json::JsonValue::CreateBooleanValue(notifyListener));
     o.SetNamedValue(L"notifyWeChat", json::JsonValue::CreateBooleanValue(notifyWeChat));
@@ -94,6 +115,8 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"stageAutoHide", json::JsonValue::CreateBooleanValue(stageAutoHide));
     o.SetNamedValue(L"hideTaskbar", json::JsonValue::CreateBooleanValue(hideTaskbar));
     o.SetNamedValue(L"hideBanners", json::JsonValue::CreateBooleanValue(hideBanners));
+    o.SetNamedValue(L"winKeyStart", json::JsonValue::CreateBooleanValue(winKeyStart));
+    o.SetNamedValue(L"winNumbers", json::JsonValue::CreateBooleanValue(winNumbers));
     o.SetNamedValue(L"startOnLogin", json::JsonValue::CreateBooleanValue(startOnLogin));
     if (pins) {
         json::JsonArray a;
@@ -146,6 +169,7 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
         if (o.HasKey(k) && o.GetNamedValue(k).ValueType() == json::JsonValueType::Boolean)
             v = o.GetNamedBoolean(k);
     };
+    flag(L"hoverRise", s.hoverRise);
     flag(L"showClock", s.showClock);
     flag(L"showTray", s.showTray);
     flag(L"showStatus", s.showStatus);
@@ -169,6 +193,8 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     flag(L"stageAutoHide", s.stageAutoHide);
     flag(L"hideTaskbar", s.hideTaskbar);
     flag(L"hideBanners", s.hideBanners);
+    flag(L"winKeyStart", s.winKeyStart);
+    flag(L"winNumbers", s.winNumbers);
     flag(L"startOnLogin", s.startOnLogin);
     if (o.HasKey(L"widgetBackdrop") && o.GetNamedValue(L"widgetBackdrop").ValueType() == json::JsonValueType::String)
         s.widgetBackdrop = std::wstring(o.GetNamedString(L"widgetBackdrop")) == L"wallpaper" ? L"wallpaper" : L"desktop";
@@ -178,6 +204,21 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     }
     if (o.HasKey(L"textColor") && o.GetNamedValue(L"textColor").ValueType() == json::JsonValueType::String)
         s.textColor = std::wstring(o.GetNamedString(L"textColor"));
+    if (o.HasKey(L"autoHide") && o.GetNamedValue(L"autoHide").ValueType() == json::JsonValueType::String)
+        s.autoHide = std::wstring(o.GetNamedString(L"autoHide"));
+    if (o.HasKey(L"statusStyle") && o.GetNamedValue(L"statusStyle").ValueType() == json::JsonValueType::String)
+        s.statusStyle = std::wstring(o.GetNamedString(L"statusStyle"));
+    auto display = [&](const wchar_t* key, std::wstring& value) {
+        if (o.HasKey(key) && o.GetNamedValue(key).ValueType() == json::JsonValueType::String)
+            value = std::wstring(o.GetNamedString(key));
+    };
+    display(L"dockDisplayMode", s.dockDisplayMode);
+    num(L"dockDisplayDelay", s.dockDisplayDelay);
+    display(L"dockDisplay", s.dockDisplay);
+    display(L"desktopDisplay", s.desktopDisplay);
+    display(L"taskbarApps", s.taskbarApps);
+    flag(L"taskbarRightPrimaryOnly", s.taskbarRightPrimaryOnly);
+    display(L"notifyPlacement", s.notifyPlacement);
     if (o.HasKey(L"pins") && o.GetNamedValue(L"pins").ValueType() == json::JsonValueType::Array) {
         std::vector<PinnedApp> pins;
         for (const auto& v : o.GetNamedArray(L"pins")) {

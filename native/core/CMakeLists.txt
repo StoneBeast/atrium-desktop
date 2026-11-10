@@ -31,7 +31,10 @@ add_executable(atrium_core WIN32
     settings.cpp
     settings_server.cpp
     shell/task_model.cpp
+    shell/app_processes.cpp
     shell/app_catalog.cpp
+    shell/start_layout.cpp
+    shell/win_key.cpp
     shell/app_registration.cpp
     shell/update_checker.cpp
     shell/system_chrome.cpp
@@ -41,6 +44,7 @@ add_executable(atrium_core WIN32
     shell/lunar.cpp
     shell/audio_devices.cpp
     shell/projection.cpp
+    shell/displays.cpp
     shell/tray_model.cpp
     shell/tray_broker.cpp
     shell/wechat_source.cpp

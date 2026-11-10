@@ -88,6 +88,8 @@ public:
 
     // Asks for another frame (an animation is still running).
     void Continue();
+    // The amount of dark ink (0..1) the glass under `r` takes now, region by region as Text does.
+    float DarkAt(D2D1_RECT_F r) const;
     void Callout(D2D1_RECT_F body, float radius, float tipX, float halfWidth, float tailHeight, float tailInset, D2D1_COLOR_F color);
     // Draws what follows faded and scaled around (cx, cy), moved by (dx, dy); DIP. Groups nest.
     void BeginGroup(float opacity, float scale, float cx, float cy, float dx = 0, float dy = 0);
@@ -128,6 +130,10 @@ public:
     void Ripple(D2D1_RECT_F r, float radius, float x, float y, float t, D2D1_COLOR_F c);
     void Clip(D2D1_RECT_F r);
     void Unclip();
+    // What is drawn between the two, blurred by `radius` (DIP, the standard deviation; 0: sharp).
+    // No nesting; clips pushed inside are popped inside.
+    void BeginBlur();
+    void EndBlur(float radius);
     // Apply the analytic glass outline to the content already drawn.
     void MaskRounded(D2D1_RECT_F r, float radius);
     ID2D1DeviceContext* D2D() const { return d2d_; }
@@ -142,6 +148,8 @@ private:
     D2D1_MATRIX_3X2_F base_;
     float alpha_ = 1; // opacity of the current group
     std::vector<std::pair<D2D1_MATRIX_3X2_F, float>> groups_;
+    winrt::com_ptr<ID2D1Image> blurTarget_;
+    winrt::com_ptr<ID2D1CommandList> blurList_;
 };
 
 class Surface {
@@ -175,6 +183,10 @@ public:
     // screen point); activatable surfaces take the foreground.
     void Show(RECT rect, bool activate, POINT anchor, bool pop = true); // pop: false appears in place (a hand-over from another popup)
     void Move(RECT rect);
+    // Only `dip` (content coordinates) and the shadow margin round it are on screen and take
+    // clicks, which elsewhere reach the windows below; an empty rectangle: the whole window. A
+    // popup whose pieces change size inside a window that does not (the start menu).
+    void SetRegion(D2D1_RECT_F dip);
     // Keep backing buffers stable during a resize; {0,0} releases the reserve.
     // Input bounds and glass shape keep their actual size.
     void ReserveResize(D2D1_SIZE_F sizeDip);
@@ -210,6 +222,7 @@ private:
     void ResetDevice();
     void Place(RECT rect); // texture = content + margin; desktop HWND stays stationary
     void ApplyPlacement();
+    void ApplyRegion();
     void PublishPanel();
     void SetInk(bool dark, const InkGrid& grid); // WM_GLASS_INK: the inks start fading there
     void FinishHide();
@@ -244,6 +257,7 @@ private:
     RECT nativeWindow_{};    // desktop host: monitor bounds, with a tight window region
     RECT presentedWindow_{}; // last content frame, used only to protect in-flight pixels from clipping
     RECT inputRegion_{};
+    D2D1_RECT_F region_{}; // SetRegion
     float scale_ = 1;
     float radius_ = 20;
     D2D1_SIZE_F resizeReserve_{};
@@ -282,6 +296,7 @@ private:
     winrt::com_ptr<ID2D1Bitmap> calloutMask_; // one current label mask, only allocated for the plain fallback
     std::array<float, 7> calloutMaskKey_{};
     winrt::com_ptr<ID2D1BitmapBrush> roundedImageBrush_;
+    winrt::com_ptr<ID2D1Effect> blur_; // Canvas::EndBlur
     winrt::com_ptr<ID2D1CommandList> roundedMask_;
     D2D1_RECT_F roundedMaskRect_{};
     float roundedMaskRadius_ = 0;

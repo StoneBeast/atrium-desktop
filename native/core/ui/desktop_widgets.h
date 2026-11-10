@@ -1,5 +1,5 @@
 // Desktop widgets after macOS's (Sonoma and later): pieces of the bar's glass
-// on the desktop, in a grid on the bar's monitor whose halves hug its left and right edges. They
+// on the desktop, in a grid on the selected desktop display whose halves hug its edges. They
 // stand just above the desktop, under every window, always clear glass with
 // its ink and a few of macOS's colours (widget_faces). Widgets never become
 // topmost. Drag one to move it (it snaps to the
@@ -30,7 +30,7 @@ public:
     void SetStatus(const SystemStatus& status);
     void SetOnRight(bool onRight);
     // The bar's monitor: the widgets live in its work area, where its capture gives them glass.
-    void SetMonitor(HMONITOR monitor);
+    void SetMonitor(HMONITOR monitor, bool refresh = false);
     void SetMaterial(WidgetMaterial material);
     // Adds a widget in the first free place; false when there is no room.
     bool Add(WidgetKind kind, WidgetSize size);

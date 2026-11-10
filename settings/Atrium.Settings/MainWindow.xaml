@@ -68,6 +68,7 @@
                 <ListViewItem AutomationProperties.Name="通知"><local:NavLabel Glyph="&#xEA8F;" Text="通知" /></ListViewItem>
                 <ListViewItem AutomationProperties.Name="小组件"><local:NavLabel Glyph="&#xE8A9;" Text="小组件" /></ListViewItem>
                 <ListViewItem AutomationProperties.Name="台前调度"><local:NavLabel Glyph="&#xE7C4;" Text="台前调度" /></ListViewItem>
+                <ListViewItem AutomationProperties.Name="显示器"><local:NavLabel Glyph="&#xE7F4;" Text="显示器" /></ListViewItem>
                 <ListViewItem AutomationProperties.Name="系统"><local:NavLabel Glyph="&#xE770;" Text="系统" /></ListViewItem>
                 <ListViewItem AutomationProperties.Name="设计语言" Margin="0,18,0,2"><local:NavLabel Glyph="&#xE8D2;" Text="设计语言" /></ListViewItem>
                 <ListViewItem AutomationProperties.Name="关于"><local:NavLabel Glyph="&#xE946;" Text="关于" /></ListViewItem>
@@ -294,13 +295,40 @@
                     <StackPanel x:Name="MainNotify" Visibility="Collapsed" Spacing="10">
                         <Border x:Name="NotifyStage" Height="340" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnNotifyStageSizeChanged">
                             <Grid>
-                                <Canvas x:Name="NotifyCards" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                                <Canvas x:Name="NotifyCards" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                    <Canvas.Clip><RectangleGeometry x:Name="NotifyPreviewClip" /></Canvas.Clip>
+                                    <Border x:Name="NotifyBackCard">
+                                        <Grid>
+                                            <Image x:Name="NotifyBackImage" Stretch="Fill" />
+                                            <Canvas x:Name="NotifyBackText" Width="384" Height="112" IsHitTestVisible="False" Visibility="Collapsed">
+                                                <Ellipse Canvas.Left="20" Canvas.Top="20.5" Width="7" Height="7" Fill="#0A84FF" />
+                                                <TextBlock x:Name="NotifyBackApp" Text="日历" Canvas.Left="32" Canvas.Top="15" Width="182" FontSize="12" FontFamily="{StaticResource TitleFont}" IsTextScaleFactorEnabled="False" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="NotifyBackTime" Text="刚刚" Canvas.Left="214" Canvas.Top="15" Width="120" FontSize="12" FontFamily="{StaticResource EmphasisFont}" IsTextScaleFactorEnabled="False" TextAlignment="Right" />
+                                                <TextBlock x:Name="NotifyBackTitle" Text="日程提醒" Canvas.Left="20" Canvas.Top="37" Width="344" FontSize="14" FontFamily="{StaticResource TitleFont}" IsTextScaleFactorEnabled="False" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="NotifyBackBody" Canvas.Left="20" Canvas.Top="61" Width="344" FontSize="13" FontFamily="{StaticResource TextFont}" IsTextScaleFactorEnabled="False" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                                            </Canvas>
+                                        </Grid>
+                                    </Border>
+                                    <Border x:Name="NotifyFrontCard">
+                                        <Grid>
+                                            <Image x:Name="NotifyFrontImage" Stretch="Fill" />
+                                            <Canvas x:Name="NotifyFrontText" Width="384" Height="112" IsHitTestVisible="False">
+                                                <Ellipse Canvas.Left="20" Canvas.Top="20.5" Width="7" Height="7" Fill="#0A84FF" />
+                                                <TextBlock x:Name="NotifyFrontApp" Text="微信" Canvas.Left="32" Canvas.Top="15" Width="182" FontSize="12" FontFamily="{StaticResource TitleFont}" IsTextScaleFactorEnabled="False" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="NotifyFrontTime" Text="刚刚" Canvas.Left="214" Canvas.Top="15" Width="120" FontSize="12" FontFamily="{StaticResource EmphasisFont}" IsTextScaleFactorEnabled="False" TextAlignment="Right" />
+                                                <TextBlock x:Name="NotifyFrontTitle" Text="林晨" Canvas.Left="20" Canvas.Top="37" Width="344" FontSize="14" FontFamily="{StaticResource TitleFont}" IsTextScaleFactorEnabled="False" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="NotifyFrontBody" Canvas.Left="20" Canvas.Top="61" Width="344" FontSize="13" FontFamily="{StaticResource TextFont}" IsTextScaleFactorEnabled="False" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                                            </Canvas>
+                                        </Grid>
+                                    </Border>
+                                </Canvas>
                                 <Border CornerRadius="28" BorderThickness="1" BorderBrush="#1F000000" IsHitTestVisible="False" />
                             </Grid>
                         </Border>
-                        <Grid>
-                            <TextBlock x:Name="NotifyCaption" Style="{StaticResource FootnoteStyle}" VerticalAlignment="Center" Margin="4,0,0,0" />
-                            <Button Content="再弹一次" Click="OnReplayNotify" HorizontalAlignment="Right" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock x:Name="NotifyCaption" Style="{StaticResource FootnoteStyle}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="4,0,0,0" />
+                            <Button Grid.Column="1" Content="再弹一次" Click="OnReplayNotify" HorizontalAlignment="Right" />
                         </Grid>
                     </StackPanel>
 
@@ -350,6 +378,63 @@
                         </Grid>
                     </StackPanel>
 
+                    <!-- ==== Displays: controls are declared here; code only binds the data. ==== -->
+                    <StackPanel x:Name="MainDisplays" Visibility="Collapsed" Spacing="24">
+                        <Grid>
+                            <TextBlock x:Name="DisplaySummary" Style="{StaticResource SectionStyle}" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                <Button Content="刷新" Click="OnRefreshDisplays" />
+                                <Button Content="Windows 显示设置" Click="OnSystemDisplays" />
+                            </StackPanel>
+                        </Grid>
+                        <ItemsControl x:Name="ConnectedDisplayList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource TileStyle}" Margin="0,0,0,10">
+                                        <StackPanel Spacing="6">
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource RowTitleStyle}" />
+                                            <TextBlock Text="{Binding Details}" Style="{StaticResource RowNoteStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border Style="{StaticResource TileStyle}">
+                            <StackPanel Spacing="16">
+                                <TextBlock Text="任务栏显示方式" Style="{StaticResource SectionStyle}" />
+                                <TextBlock Text="像 macOS Dock 一样，在另一块屏幕底边停留即可唤出任务栏；也可以固定显示位置。" Style="{StaticResource RowNoteStyle}" />
+                                <RadioButton x:Name="DockDisplayFollow" Content="在鼠标所在屏幕底边唤出" Tag="follow" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
+                                <RadioButton x:Name="DockDisplayPrimary" Content="仅在系统主显示器显示" Tag="primary" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
+                                <RadioButton x:Name="DockDisplayFixed" Content="固定到指定显示器" Tag="fixed" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
+                                <ComboBox x:Name="DockDisplayPicker" DisplayMemberPath="Name" HorizontalAlignment="Stretch" AutomationProperties.Name="任务栏显示器" SelectionChanged="OnDockDisplayChanged" />
+                                <RadioButton x:Name="DockDisplayAll" Content="在所有显示器上显示任务栏" Tag="all" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
+                                <local:SliderTile x:Name="DisplayDelay" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileStyle}">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="当使用多个显示器时，在以下位置显示我的任务栏应用" Style="{StaticResource RowTitleStyle}" />
+                                <ComboBox x:Name="TaskbarAppsPicker" HorizontalAlignment="Stretch" AutomationProperties.Name="多显示器任务栏应用显示位置" SelectionChanged="OnTaskbarAppsChanged">
+                                    <ComboBoxItem Content="所有任务栏" />
+                                    <ComboBoxItem Content="主任务栏和打开了窗口的任务栏" />
+                                    <ComboBoxItem Content="打开了窗口的任务栏" />
+                                </ComboBox>
+                                <TextBlock Text="运行标记和窗口预览遵循此规则；固定应用始终保留。主任务栏指系统主显示器上的 Atrium 任务栏。" Style="{StaticResource RowNoteStyle}" />
+                            </StackPanel>
+                        </Border>
+                        <local:ToggleTile x:Name="TaskbarRightPrimaryOnlySwitch" Title="仅在主屏显示任务栏右侧元素"
+                                          SwitchName="仅在主屏显示任务栏右侧元素" Toggled="OnTaskbarRightPrimaryOnlyToggled"
+                                          Note="开启后，其他屏幕的任务栏隐藏系统托盘、状态圆环、时钟日期和通知按钮。" />
+                        <Border Style="{StaticResource TileStyle}">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="桌面显示器" Style="{StaticResource SectionStyle}" />
+                                <TextBlock Text="小组件和台前调度留在这块屏幕上，不随任务栏移动。其他屏幕的窗口照常使用。" Style="{StaticResource RowNoteStyle}" />
+                                <ComboBox x:Name="DesktopDisplayPicker" DisplayMemberPath="Name" HorizontalAlignment="Stretch" AutomationProperties.Name="小组件与台前调度显示器" SelectionChanged="OnDesktopDisplayChanged" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="DisplayFallback" Style="{StaticResource FootnoteStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+
                     <!-- ==== System ==== -->
                     <StackPanel x:Name="MainSystem" Visibility="Collapsed">
                         <TextBlock Text="Windows" Style="{StaticResource SectionStyle}" />
@@ -360,6 +445,8 @@
                                               Note="只留下 Atrium 栏。关闭开关或退出 Atrium 时恢复；Win 键等系统快捷键照常可用。" />
                             <local:ToggleTile x:Name="HideBannersSwitch" Title="隐藏系统通知横幅" SwitchName="隐藏系统通知横幅" Toggled="OnHideBannersToggled"
                                               Note="打开 Windows 的“请勿打扰”；通知照常显示为 Atrium 卡片。关闭开关或退出时恢复。" />
+                            <local:ToggleTile x:Name="WinKeySwitch" Title="Win 键打开 Atrium 开始菜单" SwitchName="Win 键打开 Atrium 开始菜单" Toggled="OnWinKeyToggled" />
+                            <local:ToggleTile x:Name="WinNumbersSwitch" Title="Win + 数字键打开任务栏应用" SwitchName="Win + 数字键打开任务栏应用" Toggled="OnWinNumbersToggled" />
                         </local:ResponsiveGrid>
                     </StackPanel>
 
@@ -458,6 +545,8 @@
                                     <Button Style="{StaticResource ResetButtonStyle}" Tag="size" Click="OnGroupReset" AutomationProperties.Name="恢复尺寸的默认值" />
                                 </Grid>
                                 <StackPanel x:Name="SizeRows" />
+                                <local:ToggleTile x:Name="HoverRiseSwitch" Title="跟随鼠标拱起" SwitchName="背景跟随鼠标拱起" Toggled="OnHoverRiseToggled" Flat="True"
+                                                  Note="背景随鼠标位置向上拱起，幅度跟随任务栏的悬停放大设置。" />
                             </StackPanel>
                             <StackPanel>
                                 <Grid>
@@ -482,6 +571,13 @@
                                 <TextBlock Text="栏上显示" Style="{StaticResource SectionStyle}" />
                                 <local:ToggleTile x:Name="TraySwitch" Title="系统托盘" SwitchName="显示系统托盘" Toggled="OnBarContentToggled" Flat="True" />
                                 <local:ToggleTile x:Name="StatusSwitch" Title="状态栏" SwitchName="显示状态栏" Toggled="OnBarContentToggled" Flat="True" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="状态栏图标" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                            <RadioButton x:Name="StatusRing" GroupName="statusstyle" Content="圆环" Tag="ring" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
+                                            <RadioButton x:Name="StatusIcons" GroupName="statusstyle" Content="系统图标" Tag="icons" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
+                                        </local:SegmentTrack>
+                                </StackPanel>
                                 <local:ToggleTile x:Name="NotificationsSwitch" Title="通知" SwitchName="显示通知按钮" Toggled="OnBarContentToggled" Flat="True" />
                                 <local:ToggleTile x:Name="ClockSwitch" Title="时钟和日期" SwitchName="显示时钟和日期" Toggled="OnClockToggled" Flat="True"
                                                   Note="在栏的右端，使用系统的时间与日期格式。" />
@@ -493,6 +589,14 @@
                                             <RadioButton x:Name="TextAuto" GroupName="ink" Content="自动" Tag="auto" Style="{StaticResource SegmentStyle}" Checked="OnTextColorChecked" />
                                             <RadioButton x:Name="TextLight" GroupName="ink" Content="浅色" Tag="light" Style="{StaticResource SegmentStyle}" Checked="OnTextColorChecked" />
                                             <RadioButton x:Name="TextDark" GroupName="ink" Content="深色" Tag="dark" Style="{StaticResource SegmentStyle}" Checked="OnTextColorChecked" />
+                                        </local:SegmentTrack>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="显示方式" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                            <RadioButton x:Name="HideNever" GroupName="autohide" Content="常驻" Tag="never" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
+                                            <RadioButton x:Name="HideFullscreen" GroupName="autohide" Content="全屏时隐藏" Tag="fullscreen" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
+                                            <RadioButton x:Name="HideAlways" GroupName="autohide" Content="一直隐藏" Tag="always" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
                                         </local:SegmentTrack>
                                 </StackPanel>
                             </StackPanel>
@@ -513,6 +617,14 @@
                                     <Button Style="{StaticResource ResetButtonStyle}" Tag="notify" Click="OnGroupReset" AutomationProperties.Name="恢复弹出的默认值" />
                                 </Grid>
                                 <StackPanel x:Name="NotifyRows">
+                                    <StackPanel Style="{StaticResource FlatRowStyle}">
+                                        <TextBlock Text="通知位置" Style="{StaticResource RowTitleStyle}" />
+                                        <local:SegmentTrack>
+                                            <RadioButton x:Name="NotifyAtDock" GroupName="notifyplacement" Content="跟随任务栏" Tag="dock" Style="{StaticResource SegmentStyle}" Checked="OnNotifyPlacementChecked" />
+                                            <RadioButton x:Name="NotifyAtTopRight" GroupName="notifyplacement" Content="主屏右上角" Tag="topRight" Style="{StaticResource SegmentStyle}" Checked="OnNotifyPlacementChecked" />
+                                        </local:SegmentTrack>
+                                        <TextBlock Text="默认跟随任务栏；主屏右上角模式下，新通知弹入，已有通知向下让位。" Style="{StaticResource RowNoteStyle}" />
+                                    </StackPanel>
                                     <local:ToggleTile x:Name="HideBodySwitch" Title="隐藏通知正文" SwitchName="隐藏通知正文" Toggled="OnHideBodyToggled" Flat="True"
                                                       Note="卡片只显示应用和标题；通知窗口同时不会出现在截图和屏幕共享里。" />
                                 </StackPanel>

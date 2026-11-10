@@ -50,15 +50,10 @@ public sealed partial class MainWindow
         _readout[3].Note.Text = $"距底边 {s.Margin:0} px";
     }
 
-    // ---- Notifications: the popup's stack over the picture, as the core paints it ----
-    // (native/core/ui/notifications.cpp: cards 384 x 112, each its own piece of the bar's glass; the newest
-    // in front with its text, the one behind peeking 10 DIP above, 12 DIP narrower on each side.)
+    // Notification previews follow the selected live layout and its existing motion curves.
 
     private const double CardW = 384, CardH = 112, CardPeek = 10, CardInset = 12;
-    private bool _notifyDark;
-    private Border? _notifyBack, _notifyFront;
-    private Image? _notifyBackImage, _notifyFrontImage;
-    private Grid? _notifyFrontContent;
+    private bool _notifyDark, _notifyBackDark, _notifyPreviewReady, _notifyPreviewRendered;
     private bool _notifyEntrancePending;
 
     private void ShowNotifyPreview(bool animate)
@@ -68,43 +63,43 @@ public sealed partial class MainWindow
         double radius = Math.Min(Math.Clamp(s.CornerRadius, 8, Math.Max(8, s.Height / 2)), CardH / 2);
         double W = NotifyStage.ActualWidth, H = NotifyStage.ActualHeight;
         if (W < CardW + 48 || H < CardH + 60) { W = Math.Max(W, CardW + 48); H = Math.Max(H, CardH + 60); }
-        var front = new GlassTile(W - 24 - CardW, H - 28 - CardH, CardW, CardH, radius);
-        var back = new GlassTile(front.X + CardInset, front.Y - CardPeek, CardW - 2 * CardInset, CardH, radius);
+        bool topRight = s.NotifyPlacement == "topRight";
+        var front = new GlassTile(W - 24 - CardW, topRight ? 24 : H - 28 - CardH, CardW, CardH, radius);
+        var back = topRight ? new GlassTile(front.X, front.Y + CardH + CardPeek, CardW, CardH, radius)
+            : new GlassTile(front.X + CardInset, front.Y - CardPeek, CardW - 2 * CardInset, CardH, radius);
 
         NotifyCards.Width = W;
         NotifyCards.Height = H;
-        if (_notifyFront == null)
+        NotifyPreviewClip.Rect = new Rect(0, 0, W, H);
+        if (!_notifyPreviewReady)
         {
             ElementCompositionPreview.GetElementVisual(NotifyCards).Opacity = 0;
-            _notifyBackImage = new Image { Stretch = Stretch.Fill };
-            _notifyFrontImage = new Image { Stretch = Stretch.Fill };
-            _notifyFrontContent = new Grid();
-            _notifyFrontContent.Children.Add(_notifyFrontImage);
-            _notifyBack = new Border { Child = _notifyBackImage };
-            _notifyFront = new Border { Child = _notifyFrontContent };
-            NotifyCards.Children.Add(_notifyBack);
-            NotifyCards.Children.Add(_notifyFront);
+            _notifyPreviewReady = true;
         }
-        var backCard = _notifyBack!;
-        var frontCard = _notifyFront;
+        var backCard = NotifyBackCard;
+        var frontCard = NotifyFrontCard;
         const double pad = GlassSpec.InsetDip;
         backCard.Width = back.W + 2 * pad; backCard.Height = back.H + 2 * pad;
         frontCard.Width = front.W + 2 * pad; frontCard.Height = front.H + 2 * pad;
         UpdateNotifyText(s);
+        NotifyBackText.Visibility = topRight ? Visibility.Visible : Visibility.Collapsed;
         Canvas.SetLeft(backCard, back.X - pad); Canvas.SetTop(backCard, back.Y - pad);
         Canvas.SetLeft(frontCard, front.X - pad); Canvas.SetTop(frontCard, front.Y - pad);
         _notifyEntrancePending |= animate;
-        NotifyCaption.Text = $"{s.NotifyTimeout:0} 秒后收起" + (s.NotifyHideBody ? " · 正文已隐藏" : "");
+        NotifyCaption.Text = (topRight ? "主屏右上角 · 已有通知向下让位 · " : "跟随任务栏 · ") + $"{s.NotifyTimeout:0} 秒后收起" + (s.NotifyHideBody ? " · 正文已隐藏" : "");
 
         // Their glass: rendered over the picture where they rest; each card carries its own piece.
         PostTiles(NotifyCards, W, H, 1, new[] { back, front }, null, f =>
         {
-            _notifyBackImage!.Source = f.Overlay(0);
-            _notifyFrontImage!.Source = f.Overlay(1);
+            NotifyBackImage.Source = f.Overlay(0);
+            NotifyFrontImage.Source = f.Overlay(1);
+            _notifyPreviewRendered = true;
             bool dark = _notifyDark ? f.Lumas[1] >= 0.42f : f.Lumas[1] > 0.50f;
-            if (dark != _notifyDark)
+            bool backDark = _notifyBackDark ? f.Lumas[0] >= 0.42f : f.Lumas[0] > 0.50f;
+            if (dark != _notifyDark || backDark != _notifyBackDark)
             {
                 _notifyDark = dark;
+                _notifyBackDark = backDark;
                 UpdateNotifyText(s);
             }
             if (_notifyEntrancePending)
@@ -118,46 +113,26 @@ public sealed partial class MainWindow
 
     private void UpdateNotifyText(BarSettings settings)
     {
-        if (_notifyFrontContent!.Children.Count > 1) _notifyFrontContent.Children.RemoveAt(1);
-        var text = CardText(settings, _notifyDark);
-        text.Margin = new Thickness(GlassSpec.InsetDip);
-        _notifyFrontContent.Children.Add(text);
+        NotifyFrontText.Margin = NotifyBackText.Margin = new Thickness(GlassSpec.InsetDip);
+        NotifyFrontBody.Text = settings.NotifyHideBody ? "内容已隐藏" : "明天的活动时间定了吗？我这边上午都有空，下午三点以后也可以。";
+        NotifyBackBody.Text = settings.NotifyHideBody ? "内容已隐藏" : "下午三点，项目讨论。";
+        SetNotifyInk(_notifyDark, settings.NotifyHideBody, NotifyFrontApp, NotifyFrontTime, NotifyFrontTitle, NotifyFrontBody);
+        SetNotifyInk(_notifyBackDark, settings.NotifyHideBody, NotifyBackApp, NotifyBackTime, NotifyBackTitle, NotifyBackBody);
     }
 
     // PaintCard: the app (12 semibold, secondary ink) after the unread dot, when (12, faint) on the right,
     // the title (14 semibold), the body (13, secondary ink, two lines) or "content hidden".
-    private static FrameworkElement CardText(BarSettings s, bool dark)
+    private static void SetNotifyInk(bool dark, bool hideBody, TextBlock app, TextBlock time, TextBlock title, TextBlock body)
     {
         Color ink = dark ? Color.FromArgb(255, 0x11, 0x13, 0x17) : Colors.White;
         SolidColorBrush A(double a) => new(Color.FromArgb((byte)Math.Round(255 * a), ink.R, ink.G, ink.B));
         var text = A(dark ? 0.92 : 0.96);
         var sub = A(dark ? 0.66 : 0.76);
         var faint = A(dark ? 0.46 : 0.56);
-        var c = new Canvas { IsHitTestVisible = false };
-        TextBlock T(string str, double size, string font, Brush brush, double x, double y, double w, bool wrap = false)
-        {
-            var t = new TextBlock
-            {
-                Text = str, FontSize = size, Foreground = brush, Width = w, FontFamily = (FontFamily)Application.Current.Resources[font],
-                TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxLines = wrap ? 2 : 1, IsTextScaleFactorEnabled = false,
-            };
-            Microsoft.UI.Xaml.Documents.Typography.SetNumeralAlignment(t, Microsoft.UI.Xaml.FontNumeralAlignment.Tabular);
-            Canvas.SetLeft(t, x); Canvas.SetTop(t, y);
-            c.Children.Add(t);
-            return t;
-        }
-        double tx = 20, ty = 16;
-        var dot = new Ellipse { Width = 7, Height = 7, Fill = new SolidColorBrush(Color.FromArgb(255, 0x0A, 0x84, 0xFF)) };
-        Canvas.SetLeft(dot, tx); Canvas.SetTop(dot, ty + 4.5);
-        c.Children.Add(dot);
-        T("微信", 12, "TitleFont", sub, tx + 12, ty - 1, CardW - 170 - tx - 12);
-        var when = T("刚刚", 12, "EmphasisFont", faint, CardW - 170, ty - 1, 120);
-        when.TextAlignment = TextAlignment.Right;
-        T("林晨", 14, "TitleFont", text, tx, ty + 21, CardW - 20 - tx);
-        if (s.NotifyHideBody) T("内容已隐藏", 13, "TextFont", faint, tx, ty + 45, CardW - 20 - tx);
-        else T("明天的活动时间定了吗？我这边上午都有空，下午三点以后也可以。", 13, "TextFont", sub, tx, ty + 45, CardW - 20 - tx, wrap: true);
-        return c;
+        app.Foreground = sub;
+        time.Foreground = faint;
+        title.Foreground = text;
+        body.Foreground = hideBody ? faint : sub;
     }
 
     private void OnNotifyStageSizeChanged(object sender, SizeChangedEventArgs e)
@@ -169,16 +144,26 @@ public sealed partial class MainWindow
 
     private void ReplayNotify()
     {
-        if (_notifyBack == null || _notifyFront == null) return;
-        if (_notifyFrontImage?.Source == null)
+        if (!_notifyPreviewRendered)
         {
             _notifyEntrancePending = true;
             return;
         }
-        // bar.cpp: the bell's centre is Height / 2 + 4 DIP from the bar's right edge.
-        var anchor = new Vector2((float)(Canvas.GetLeft(_notifyFront) + _notifyFront.Width - GlassSpec.InsetDip - _current.Height / 2 - 4),
-                                 (float)(Canvas.GetTop(_notifyFront) + _notifyFront.Height - GlassSpec.InsetDip));
-        ReplayNotification(NotifyCards, anchor, _notifyBack, _notifyFront);
+        if (_current.NotifyPlacement == "topRight")
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(NotifyCards);
+            visual.StopAnimation("Scale");
+            visual.StopAnimation("Opacity");
+            visual.Scale = Vector3.One;
+            visual.Opacity = 1;
+            AnimateNotifyCard(NotifyBackCard, new Vector3(0, -(float)(CardH + CardPeek), 0), false);
+            AnimateNotifyCard(NotifyFrontCard, new Vector3((float)CardW, 0, 0), true);
+            return;
+        }
+        // The default popup still opens from the taskbar bell.
+        var anchor = new Vector2((float)(Canvas.GetLeft(NotifyFrontCard) + NotifyFrontCard.Width - GlassSpec.InsetDip - _current.Height / 2 - 4),
+                                 (float)(Canvas.GetTop(NotifyFrontCard) + NotifyFrontCard.Height - GlassSpec.InsetDip));
+        ReplayNotification(NotifyCards, anchor, NotifyBackCard, NotifyFrontCard);
     }
 
     // PopVisual (glass_renderer.cpp) plus each new card's Glide (notifications.cpp).
@@ -209,31 +194,36 @@ public sealed partial class MainWindow
         visual.StartAnimation("Opacity", fade);
 
         foreach (var card in cards)
-        {
-            ElementCompositionPreview.SetIsTranslationEnabled(card, true);
-            var content = ElementCompositionPreview.GetElementVisual(card);
-            content.StopAnimation("Translation");
-            content.StopAnimation("Opacity");
-            content.Properties.InsertVector3("Translation", new Vector3(0, 18, 0));
-            content.Opacity = 0;
-            var move = compositor.CreateVector3KeyFrameAnimation();
-            double moveTime = Math.Log(18 / 0.2) / 16; // Glide(y, target, dt, 16, 0.2)
-            move.Duration = TimeSpan.FromSeconds(moveTime);
-            move.InsertKeyFrame(0, new Vector3(0, 18, 0));
-            NotificationFrames(compositor, moveTime, t => ApproachSample(t, 16), (time, value, ease) =>
-                move.InsertKeyFrame(time, new Vector3(0, (float)(18 * (1 - value)), 0), ease));
-            move.InsertKeyFrame(1, Vector3.Zero);
-            content.StartAnimation("Translation", move);
+            AnimateNotifyCard(card, new Vector3(0, 18, 0), true);
+    }
 
-            var opacity = compositor.CreateScalarKeyFrameAnimation();
-            double fadeTime = Math.Log(1 / 0.01) / 12; // Glide(alpha, 1, dt, 12, 0.01)
-            opacity.Duration = TimeSpan.FromSeconds(fadeTime);
-            opacity.InsertKeyFrame(0, 0);
-            NotificationFrames(compositor, fadeTime, t => ApproachSample(t, 12), (time, value, ease) =>
-                opacity.InsertKeyFrame(time, (float)value, ease));
-            opacity.InsertKeyFrame(1, 1);
-            content.StartAnimation("Opacity", opacity);
-        }
+    private static void AnimateNotifyCard(FrameworkElement card, Vector3 offset, bool fade)
+    {
+        ElementCompositionPreview.SetIsTranslationEnabled(card, true);
+        var content = ElementCompositionPreview.GetElementVisual(card);
+        var compositor = content.Compositor;
+        content.StopAnimation("Translation");
+        content.StopAnimation("Opacity");
+        content.Properties.InsertVector3("Translation", offset);
+        content.Opacity = fade ? 0 : 1;
+        var move = compositor.CreateVector3KeyFrameAnimation();
+        double moveTime = Math.Log(offset.Length() / 0.2) / 16; // the native card's Glide
+        move.Duration = TimeSpan.FromSeconds(moveTime);
+        move.InsertKeyFrame(0, offset);
+        NotificationFrames(compositor, moveTime, t => ApproachSample(t, 16), (time, value, ease) =>
+            move.InsertKeyFrame(time, offset * (float)(1 - value), ease));
+        move.InsertKeyFrame(1, Vector3.Zero);
+        content.StartAnimation("Translation", move);
+        if (!fade) return;
+
+        var opacity = compositor.CreateScalarKeyFrameAnimation();
+        double fadeTime = Math.Log(1 / 0.01) / 12; // Glide(alpha, 1, dt, 12, 0.01)
+        opacity.Duration = TimeSpan.FromSeconds(fadeTime);
+        opacity.InsertKeyFrame(0, 0);
+        NotificationFrames(compositor, fadeTime, t => ApproachSample(t, 12), (time, value, ease) =>
+            opacity.InsertKeyFrame(time, (float)value, ease));
+        opacity.InsertKeyFrame(1, 1);
+        content.StartAnimation("Opacity", opacity);
     }
 
     private static (double Value, double Velocity) PopSample(double time)
@@ -455,10 +445,11 @@ public sealed partial class MainWindow
             _widgetWatcher.Renamed += (_, _) => DispatcherQueue.TryEnqueue(() => { if (_page == 4) ShowWidgetMap(); });
         }
 
-        // The work area of the bar's (primary) monitor, in DIP at that monitor's own scale.
-        double scale = GetDpiForMonitor(MonitorFromPoint(default, 1 /* MONITOR_DEFAULTTOPRIMARY */), 0, out uint dpi, out _) == 0 ? dpi / 96.0 : 1;
-        var wa = DisplayArea.Primary.WorkArea;
-        double W = wa.Width / scale, H = wa.Height / scale;
+        // Match the selected desktop's grid, including mixed scaling.
+        var displays = DesktopDisplay.Read();
+        var display = displays.First(d => d.Id == _current.DesktopDisplay ||
+            (d.Primary && !displays.Any(other => other.Id == _current.DesktopDisplay)));
+        double W = display.WorkWidth / display.Scale, H = display.WorkHeight / display.Scale;
         int cols = Math.Max(1, (int)((W - 2 * WMargin + WGap) / (WCell + WGap)));
         int rows = Math.Max(1, (int)((H - 2 * WMargin - 90 + WGap) / (WCell + WGap)));
         double stageW = WidgetStage.ActualWidth > 0 ? WidgetStage.ActualWidth : 760;

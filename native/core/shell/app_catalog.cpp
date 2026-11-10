@@ -1,6 +1,7 @@
 #include "shell/app_catalog.h"
 
 #include "log.h"
+#include "shell/start_layout.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -12,6 +13,7 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <string_view>
 
 namespace atrium {
@@ -321,14 +323,25 @@ void AppCatalog::PrefetchStartIcons(int px)
     QueuePrefetch();
 }
 
+void AppCatalog::SetStartIds(std::vector<std::wstring> ids)
+{
+    std::lock_guard g(mutex_);
+    startIds_ = std::set<std::wstring>(ids.begin(), ids.end());
+    QueuePrefetch();
+}
+
 void AppCatalog::QueuePrefetch()
 {
     if (prefetchPx_ <= 0)
         return;
-    for (const CatalogApp& app : startPins_) {
-        auto key = std::make_pair(app.id, prefetchPx_);
+    auto queue = [&](const std::wstring& id) {
+        auto key = std::make_pair(id, prefetchPx_);
         if (!icons_.contains(key)) QueueIcon(key, true);
-    }
+    };
+    for (const CatalogApp& app : startPins_)
+        queue(app.id);
+    for (const std::wstring& id : startIds_)
+        queue(id);
     cv_.notify_all();
 }
 
@@ -367,7 +380,8 @@ void AppCatalog::PruneIcons()
 {
     auto protectedIcon = [&](const auto& key) {
         return visibleIcons_.contains(key) || requested_.contains(key) ||
-            (key.second == prefetchPx_ && std::any_of(startPins_.begin(), startPins_.end(), [&](const auto& app) { return app.id == key.first; }));
+            (key.second == prefetchPx_ && (startIds_.contains(key.first) ||
+                                           std::any_of(startPins_.begin(), startPins_.end(), [&](const auto& app) { return app.id == key.first; })));
     };
     std::erase_if(icons_, [&](const auto& entry) { return loaded_ && !liveIds_.contains(entry.first.first) && !protectedIcon(entry.first); });
     std::erase_if(failed_, [&](const auto& entry) { return loaded_ && !liveIds_.contains(entry.first.first) && !protectedIcon(entry.first); });
@@ -519,6 +533,8 @@ bool AppCatalog::Matches(const CatalogApp& app, const std::wstring& query)
         return true;
     // Localised names hide the English one ("计算器"); the id and the exe
     // usually carry it (Microsoft.WindowsCalculator_..., notepad.exe).
+    if (std::all_of(q.begin(), q.end(), [](wchar_t c) { return c < 128 && iswalnum(c); }) && NameInitials(app.name).rfind(q, 0) == 0)
+        return true;
     auto tail = [](const std::wstring& s) { size_t p = s.find_last_of(L"\\/"); return p == std::wstring::npos ? s : s.substr(p + 1); };
     return q.size() >= 3 && (Fold(tail(app.id)).find(q) != std::wstring::npos || Fold(tail(app.target)).find(q) != std::wstring::npos);
 }

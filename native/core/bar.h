@@ -8,9 +8,10 @@
 //
 // Stacking (D25): both windows are topmost and are raised again when another
 // window covers them (foreground changes, a move ends, a 1 s check); they stay
-// below a revealed system taskbar. While a maximized or full-screen app is in
-// front the bar slides down off the screen and comes up again while the
-// pointer is at the screen's bottom edge below it (auto-hide).
+// below a revealed system taskbar. While the top app on this monitor is maximized
+// or full screen, the bar slides off screen and comes up again while the
+// pointer is at the screen's bottom edge below it (auto-hide; setting autoHide
+// can keep it up always, or hide it whatever is in front).
 // The render thread also draws the glass layer of Atrium's popups.
 #pragma once
 
@@ -18,6 +19,7 @@
 #include "render/glass_panel.h"
 #include "settings.h"
 #include "shell/task_model.h"
+#include "shell/displays.h"
 
 #include <windows.h>
 #include <dwrite_3.h>
@@ -40,7 +42,7 @@ public:
     // debugCapturable: development only. Leaves the bar visible to screen capture
     // and freezes the backdrop after the first frame so the glass never samples
     // itself; used to take screenshots of the real surface.
-    Bar(HINSTANCE instance, bool debugCapturable);
+    Bar(HINSTANCE instance, bool debugCapturable, std::wstring display = {});
     ~Bar();
     Bar(const Bar&) = delete;
     Bar& operator=(const Bar&) = delete;
@@ -49,12 +51,18 @@ public:
     void Apply(const Settings& s);
     void SetItems(std::vector<TaskItem> items);
     void Relayout();
+    void RefreshDisplays(); // topology, resolution or work-area changed
+    const std::wstring& DisplayOverride() const { return displayOverride_; }
+    HMONITOR TaskMonitor() const { return filterTasks_ ? hmonitor_ : nullptr; }
+    const std::vector<TaskItem>& Items() const { return items_; }
     void SetVisible(bool visible);
     bool Visible() const { return visible_; }
     // Unread notifications, shown as a badge on the bell.
     void SetUnread(int count);
     // Network, battery and volume for the status icon.
     void SetStatus(const SystemStatus& status);
+    // The app at `index` (0-based, in bar order) as a click on it would (Win + digit).
+    void ActivateIndex(int index);
     // Screen rectangle of an entry ("#start", "#notify", an app key); empty if not shown.
     RECT EntryRect(const std::wstring& key) const;
     // Screen rectangle of the glass shape.
@@ -98,6 +106,9 @@ public:
     std::function<void()> onPreviewLeave;
     std::function<void()> onPreviewClose;
     std::function<bool()> previewOpen; // a preview is up: moving to another app swaps it at once
+    std::function<void()> onMonitorChanged = [] {}; // close or re-anchor the bar's popups
+    std::function<void()> onInteract = [] {}; // this display owns the next popup
+    std::function<void()> onItemsChanged = [] {}; // keep an open preview filtered after a window crosses displays
 
 private:
     struct Snapshot {
@@ -109,6 +120,7 @@ private:
         float scale = 1;
         bool visible = true;
         unsigned generation = 0;
+        unsigned displayGeneration = 0;
         std::vector<GlassPanel> panels;
     };
     struct Hit {
@@ -145,10 +157,11 @@ private:
     void SetRegion(bool extended); // input region: the shape, plus the room above it while magnified
     static void CALLBACK WinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD thread, DWORD time);
     void GuardStacking(const wchar_t* why);
-    bool ForegroundCoversScreen() const;
-    void UpdateCover();    // the foreground app is maximized or full screen on the bar's monitor
+    bool MonitorCoveredByApp() const;
+    void UpdateCover();    // this monitor's top app is maximized or full screen, regardless of focus
     void UpdateAutoHide(); // tucks the bar away or brings it up
     void WatchPointer();   // while covered: the screen's bottom edge brings the bar up, leaving it lets it go
+    void WatchDisplays();  // summon the shared Dock on another display, after the hover delay
     void Raise();
 
     bool debugCapturable_ = false;
@@ -161,6 +174,9 @@ private:
     float tooltipTailX_ = 0;
     Settings settings_;
     std::vector<TaskItem> items_;
+    std::vector<TaskItem> allItems_; // unfiltered task model, shared by every display
+    bool filterTasks_ = false;
+    bool layoutPending_ = false; // coalesce window-move events
     std::map<std::wstring, CachedIcon> icons_;
     uint64_t nextIconId_ = 1;
     BarScene scene_;
@@ -211,6 +227,12 @@ private:
     RECT window_{};
     RECT monitor_{};
     HMONITOR hmonitor_ = nullptr;
+    std::vector<DisplayInfo> displays_;
+    std::wstring activeDisplay_;
+    std::wstring displayOverride_; // an extra taskbar in all-displays mode
+    HMONITOR summonMonitor_ = nullptr;
+    ULONGLONG summonAt_ = 0;
+    unsigned displayGeneration_ = 0;
     float scale_ = 1;
     winrt::com_ptr<IDWriteFactory3> dwrite_; // UI-thread text measurement
 

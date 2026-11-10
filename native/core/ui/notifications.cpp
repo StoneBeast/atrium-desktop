@@ -3,6 +3,7 @@
 #include "clock.h"
 #include "log.h"
 #include "motion.h"
+#include "ui/notification_layout.h"
 
 #include <shellapi.h>
 #include <shellscalingapi.h>
@@ -80,13 +81,27 @@ Notifications::Notifications(HINSTANCE instance)
     };
 }
 
-void Notifications::SetOptions(double timeoutSeconds, bool hideBody)
+void Notifications::SetOptions(double timeoutSeconds, bool hideBody, const std::wstring& placement)
 {
+    const bool placementChanged = topRight_ != (placement == L"topRight");
+    if (placementChanged) {
+        HidePopup(L"placement changed");
+        topRight_ = placement == L"topRight";
+    }
     timeout_ = std::clamp(timeoutSeconds, 3.0, 30.0);
     hideBody_ = hideBody;
     // With their text hidden, the cards stay out of screenshots too.
     popup_.surface->SetPrivate(hideBody);
     center_.surface->SetPrivate(hideBody);
+    if (placementChanged && center_.surface->Visible()) {
+        center_.cards.clear();
+        center_.scroll = center_.scrollTarget = 0;
+        center_.stackPos = center_.stackVel = 0;
+        center_.stackGoal = -1;
+        center_.stackMoving = false;
+        expanded_ = topRight_ || notices_.size() <= 1;
+        Layout(Mode::Center); // an open centre follows a changed placement immediately
+    }
     popup_.surface->Invalidate();
     center_.surface->Invalidate();
 }
@@ -191,6 +206,8 @@ void Notifications::Post(Notice n, bool silent)
         popupIds_.erase(old);
     }
     popupIds_.insert(popupIds_.begin(), n.id);
+    if (topRight_)
+        popup_.scroll = popup_.scrollTarget = 0; // a new arrival takes the top slot
     ShiftStack(Mode::Popup, 0, +1);
     Layout(Mode::Popup);
     if (popup_.surface->Visible())
@@ -202,6 +219,8 @@ void Notifications::PanelsChanged()
 {
     if (!popupIds_.empty())
         Layout(Mode::Popup);
+    if (center_.surface->Visible())
+        Layout(Mode::Center); // also follow primary-display and work-area changes
 }
 
 void Notifications::HidePopup(const wchar_t* why)
@@ -230,7 +249,7 @@ void Notifications::ToggleCenter(bool expand)
         return; // the click on the bell that just closed it
     if (!handoffPending_)
         HidePopup(L"center opened");
-    expanded_ = expand || notices_.size() <= 1;
+    expanded_ = topRight_ || expand || notices_.size() <= 1;
     center_.scroll = center_.scrollTarget = 0;
     Layout(Mode::Center);
     // Opening the list marks everything as read.
@@ -373,7 +392,7 @@ void Notifications::Layout(Mode mode)
         HidePopup(L"empty");
         return;
     }
-    if (mode == Mode::Popup && held && held()) {
+    if (mode == Mode::Popup && !topRight_ && held && held()) {
         // Another panel is open: the cards wait (their timeout too) until it closes.
         if (v.surface->Visible()) {
             KillTimer(v.surface->Hwnd(), kPopupTimer);
@@ -383,6 +402,38 @@ void Notifications::Layout(Mode mode)
         SetTimer(v.surface->Hwnd(), kHoldTimer, kHoldMs, nullptr);
         return;
     }
+    if (topRight_) {
+        MONITORINFO primary{sizeof(primary)};
+        GetMonitorInfoW(MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY), &primary);
+        const float scale = PopupScale(primary.rcWork);
+        const auto layout = notification::TopRightLayout(primary.rcWork, scale, kW, CardHeight(), kGap, kPopupGapDip,
+            shown.size(), mode == Mode::Center ? kPill + kGap : 0);
+        v.contentH = layout.contentHeight;
+        v.viewH = layout.viewHeight;
+        v.contentTop = layout.contentTop;
+        const float maxScroll = std::max(0.f, v.contentH - v.viewH);
+        v.scrollTarget = std::clamp(v.scrollTarget, 0.f, maxScroll);
+        v.scroll = std::clamp(v.scroll, 0.f, maxScroll);
+        if (!v.surface->Visible()) {
+            v.cards.clear();
+            v.glow.clear();
+            v.lastPaint = 0;
+            SetWindowRgn(v.surface->Hwnd(), nullptr, FALSE);
+            v.regionTop = v.regionBottom = -1;
+            // The centre opens at the same corner; arrivals still animate card by card.
+            v.surface->Show(layout.rect, mode == Mode::Center, POINT{layout.rect.right, layout.rect.top}, mode == Mode::Center);
+        } else {
+            const RECT old = v.surface->Rect();
+            if (!EqualRect(&old, &layout.rect)) {
+                SetWindowRgn(v.surface->Hwnd(), nullptr, FALSE);
+                v.regionTop = v.regionBottom = -1;
+            }
+            v.surface->Move(layout.rect);
+            v.surface->Invalidate();
+        }
+        return;
+    }
+    v.contentTop = 0;
     RECT bell = bellRect ? bellRect() : RECT{};
     RECT bar = barRect ? barRect() : bell;
     float s = PopupScale(bar);
@@ -421,6 +472,7 @@ void Notifications::Layout(Mode mode)
     RECT r{right - w, std::max(int(wa.top) + margin, bottom - h), right, bottom};
     if (!v.surface->Visible()) {
         v.cards.clear(); // the cards arrive afresh
+        v.lastPaint = 0;
         v.glow.clear();
         v.stackPos = v.stackVel = 0;
         v.stackGoal = -1;
@@ -437,9 +489,10 @@ void Notifications::Layout(Mode mode)
             handoff_.clear();
             handoffPending_ = false;
         }
-        if (v.regionTop != -1) {
+        if (v.regionTop != -1 || v.regionBottom != -1) {
             SetWindowRgn(v.surface->Hwnd(), nullptr, FALSE);
             v.regionTop = -1;
+            v.regionBottom = -1;
         }
         // Pops out of the bell (unless the stack turns into the list in place).
         v.surface->Show(r, mode == Mode::Center, POINT{(bell.left + bell.right) / 2, bottom}, !handoff);
@@ -548,6 +601,8 @@ bool Notifications::StepStack(View& v, size_t n, float dtMs)
 void Notifications::ShiftStack(Mode mode, size_t index, int by)
 {
     View& v = ViewOf(mode);
+    if (topRight_)
+        return;
     if (!v.surface->Visible())
         return;
     int front = int(std::lround(v.stackPos));
@@ -628,9 +683,10 @@ void Notifications::Paint(Mode mode, Canvas& c)
     auto shown = Shown(mode);
     const bool hideBody = !shown.empty() && BodyHidden(); // one system query per frame, shared by its cards
     std::vector<ShapeDip> shapes;
-    const float listH = v.viewH; // the cards: [0, listH]; the list's capsule below
+    const float listH = v.viewH, listTop = v.contentTop, listBottom = listTop + listH;
 
-    const bool stack = mode == Mode::Popup || (!expanded_ && shown.size() > 1);
+    const bool column = topRight_;
+    const bool stack = !column && (mode == Mode::Popup || (!expanded_ && shown.size() > 1));
     bool moving = Glide(v.scroll, v.scrollTarget, dt, 18, 0.2f); // anything moving: the region waits
     if (stack) {
         const float last = float(shown.empty() ? 0 : shown.size() - 1);
@@ -647,7 +703,8 @@ void Notifications::Paint(Mode mode, Canvas& c)
     }
     v.stacked = stack;
     v.count = shown.size();
-    float top = listH;                                             // the top of what is shown
+    float top = listBottom;                                        // the top of what is shown
+    float bottom = 0;
     if (moving)
         c.Continue();
     const float card = CardHeight(), cardR = CardRadius();
@@ -676,14 +733,20 @@ void Notifications::Paint(Mode mode, Canvas& c)
                 talpha = (1 - u) * (1 - u);
                 tcontent = 1 - motion::EaseOut(std::clamp(u * 2.f, 0.f, 1.f)); // its text goes first: two texts never show strongly at once
             }
+        } else if (column) {
+            ty = listTop + notification::CardTop(i, card, kGap, v.scroll);
+            tinset = 0;
+            talpha = 1;
         } else {
             ty = listH - card - float(i) * (card + kGap) + v.scroll;
             tinset = 0;
             talpha = 1;
         }
         CardAnim& a = v.cards[n.id];
-        if (!a.placed) // a new card rises from the bar
-            a = {ty + 18, tinset, 0, 1, true};
+        if (!a.placed) {
+            a = {column ? ty : ty + 18, tinset, 0, 1, true};
+            a.x = column ? w : 0; // new top-right card enters; existing cards glide down
+        }
         bool cardMoving = false;
         if (stack && v.stackMoving) {
             // The wheel drives the stack: every card follows it exactly (it is smooth already).
@@ -696,12 +759,13 @@ void Notifications::Paint(Mode mode, Canvas& c)
             cardMoving |= Glide(a.inset, tinset, dt, 16, 0.1f);
             cardMoving |= Glide(a.alpha, talpha, dt, 12, 0.01f);
             cardMoving |= Glide(a.content, tcontent, dt, 9, 0.01f);
+            cardMoving |= Glide(a.x, 0, dt, 16, 0.2f);
         }
-        float alpha = a.alpha, dx = 0, shrink = 0;
+        float alpha = a.alpha, dx = a.x, shrink = 0;
         if (auto l = leaving_.find(n.id); l != leaving_.end()) {
             // Closing: it fades out while drifting right and settling back a little.
             float e = motion::EaseOut(float(std::max(0.0, c.now - l->second) / kLeaveMs));
-            dx = 36 * e;
+            dx += 36 * e;
             shrink = 0.07f * e;
             alpha *= (1 - e) * (1 - e);
             cardMoving = true;
@@ -712,8 +776,11 @@ void Notifications::Paint(Mode mode, Canvas& c)
         float sx = (w - 2 * a.inset) * shrink / 2, sy = card * shrink / 2;
         rects[i] = D2D1::RectF(a.inset + dx + sx, a.y + sy, w - a.inset + dx - sx, a.y + card - sy);
         alphas[i] = alpha;
-        if (alpha > 0.02f)
+        if (alpha > 0.02f) {
             top = std::min(top, std::max(0.f, rects[i].top));
+            if (rects[i].top < listBottom && rects[i].bottom > listTop)
+                bottom = std::max(bottom, std::min(listBottom, rects[i].bottom));
+        }
     }
     for (auto it = v.cards.begin(); it != v.cards.end();) // forget cards that are gone
         it = std::any_of(shown.begin(), shown.end(), [&](const Notice* n) { return n->id == it->first; }) ? std::next(it) : v.cards.erase(it);
@@ -721,7 +788,7 @@ void Notifications::Paint(Mode mode, Canvas& c)
     // Back to front: the newest card is drawn last, on top. Each card is a
     // piece of glass; a fading card's glass shrinks away with it, and glass
     // scrolled out of the list is cut at the list's edge.
-    c.Clip(D2D1::RectF(-1, 0, w + 1, listH));
+    c.Clip(D2D1::RectF(-1, listTop, w + 1, listBottom));
     // A passed card is in front of the stack for the first half of its way
     // (its text still shows) and under it for the second (it goes back under
     // the new front); the stack itself from the back. Drawn the other way, a
@@ -740,12 +807,12 @@ void Notifications::Paint(Mode mode, Canvas& c)
     for (size_t i : order) {
         bool full = !stack || v.cards[shown[i]->id].content > 0.01f;
         D2D1_RECT_F r = rects[i];
-        if (alphas[i] <= 0.02f || r.bottom < 0 || r.top > listH)
+        if (alphas[i] <= 0.02f || r.bottom < listTop || r.top > listBottom)
             continue;
         // The glass fades with the card (and settles back a hair).
         float k = 0.96f + 0.04f * alphas[i], hw = (r.right - r.left) / 2 * k, hh = (r.bottom - r.top) / 2 * k;
         float mx = (r.left + r.right) / 2, my = (r.top + r.bottom) / 2;
-        D2D1_RECT_F g = D2D1::RectF(mx - hw, std::max(0.f, my - hh), mx + hw, std::min(listH, my + hh));
+        D2D1_RECT_F g = D2D1::RectF(mx - hw, std::max(listTop, my - hh), mx + hw, std::min(listBottom, my + hh));
         if (g.bottom - g.top > 8)
             shapes.push_back({g, cardR, 1 - std::clamp(alphas[i], 0.f, 1.f)});
         size_t hitsBefore = v.hits.size();
@@ -755,8 +822,8 @@ void Notifications::Paint(Mode mode, Canvas& c)
         // Only the visible part of a card is clickable (a card scrolled below
         // the list must not catch presses meant for the capsule).
         for (size_t h = hitsBefore; h < v.hits.size(); ++h) {
-            v.hits[h].rect.top = std::max(v.hits[h].rect.top, 0.f);
-            v.hits[h].rect.bottom = std::min(v.hits[h].rect.bottom, listH);
+            v.hits[h].rect.top = std::max(v.hits[h].rect.top, listTop);
+            v.hits[h].rect.bottom = std::min(v.hits[h].rect.bottom, listBottom);
         }
     }
     c.Unclip();
@@ -767,9 +834,11 @@ void Notifications::Paint(Mode mode, Canvas& c)
     }
 
     if (mode == Mode::Center) {
-        // The list's capsule, shaped like the bar.
-        D2D1_RECT_F pill = D2D1::RectF(0, listH + kGap, w, listH + kGap + kPill);
+        // Top-right controls stay above the cards so scrolling never hides them.
+        const float pillTop = column ? 0 : listH + kGap;
+        D2D1_RECT_F pill = D2D1::RectF(0, pillTop, w, pillTop + kPill);
         top = std::min(top, pill.top);
+        bottom = std::max(bottom, pill.bottom);
         const float pr = kPill / 2;
         shapes.push_back({pill, pr});
         if (c.panel)
@@ -790,7 +859,7 @@ void Notifications::Paint(Mode mode, Canvas& c)
         };
         if (live)
             button(L"clear", L"全部清除");
-        if (expanded_ && shown.size() > 1)
+        if (!column && expanded_ && shown.size() > 1)
             button(L"collapse", L"收起");
     }
     v.surface->SetShapes(shapes, moving);
@@ -798,16 +867,23 @@ void Notifications::Paint(Mode mode, Canvas& c)
 
     // At rest the window starts at the top of what it shows (the shadow's
     // room above included); while anything moves it is whole.
-    int regionTop = moving ? -1 : int(std::lround(top * c.scale));
+    int regionTop = column || moving ? -1 : int(std::lround(top * c.scale));
     if (regionTop == 0)
         regionTop = -1;
     RECT wr{};
-    if (regionTop != v.regionTop && GetWindowRect(v.surface->Hwnd(), &wr)) {
-        HRGN rgn = regionTop > 0 ? CreateRectRgn(0, regionTop, wr.right - wr.left, wr.bottom - wr.top) : nullptr;
-        if (SetWindowRgn(v.surface->Hwnd(), rgn, FALSE))
-            v.regionTop = regionTop;
-        else if (rgn)
-            DeleteObject(rgn);
+    if (GetWindowRect(v.surface->Hwnd(), &wr)) {
+        const int inset = ((wr.right - wr.left) - (rr.right - rr.left)) / 2;
+        const int regionBottom = column ? std::min(int(wr.bottom - wr.top), int(std::ceil(bottom * c.scale)) + 2 * inset) : -1;
+        if (regionTop != v.regionTop || regionBottom != v.regionBottom) {
+            HRGN rgn = regionTop > 0 || regionBottom >= 0 ? CreateRectRgn(0, std::max(0, regionTop), wr.right - wr.left,
+                regionBottom >= 0 ? regionBottom : wr.bottom - wr.top) : nullptr;
+            if (SetWindowRgn(v.surface->Hwnd(), rgn, FALSE)) {
+                v.regionTop = regionTop;
+                v.regionBottom = regionBottom;
+            } else if (rgn) {
+                DeleteObject(rgn);
+            }
+        }
     }
 }
 
@@ -949,13 +1025,13 @@ bool Notifications::Message(Mode mode, UINT m, WPARAM w, LPARAM l, LRESULT& resu
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(w);
         size_t shownCount = Shown(mode).size();
-        if (mode == Mode::Popup || (!expanded_ && shownCount > 1)) {
+        if (!topRight_ && (mode == Mode::Popup || (!expanded_ && shownCount > 1))) {
             // Over a stack: the wheel goes through it, staying a stack
             // (down: older cards come to the front).
             PushStack(v, shownCount, delta);
             return true;
         }
-        v.scrollTarget += float(delta) / WHEEL_DELTA * 80; // older cards are above: the wheel up brings them down
+        v.scrollTarget += float(delta) / WHEEL_DELTA * (topRight_ ? -80 : 80);
         v.scrollTarget = std::clamp(v.scrollTarget, 0.f, std::max(0.f, v.contentH - v.viewH));
         v.surface->Invalidate();
         return true;

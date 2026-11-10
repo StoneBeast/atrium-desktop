@@ -29,6 +29,7 @@ cbuffer GlassParams : register(b0)
     float  PartMix;     // 0: the parts, 1: the rounded rectangle Shape (the parts' union has seams inside where they meet)
     float  Pad1;
     float4 Tail;        // Dock label pointer: tip x, base half width, height below Shape.w, overlap inside the body
+    float4 Wave;        // Dock hover: centre x, support half width, upward height, unused (px)
 };
 
 Texture2D Bg : register(t0);
@@ -139,6 +140,14 @@ float sdTail(float2 px)
 
 float ShapeDistance(float2 px, bool edge)
 {
+    // A C3 bump stretches the glass upwards while keeping its bottom fixed.
+    if (Wave.z > 0) {
+        float x = (px.x - Wave.x) / max(Wave.y, 1);
+        float w = saturate(1 - x * x);
+        float lift = Wave.z * w * w * w * w;
+        float height = max(Shape.w - Shape.y, 1);
+        px.y = Shape.w - (Shape.w - px.y) * height / (height + lift);
+    }
     // C3 metric fields are used while shapes merge. The isolated outline
     // uses the exact implicit equation below; a blend needs a smooth field.
     edge = edge && PartCount < 0.5;

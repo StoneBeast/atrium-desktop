@@ -27,11 +27,21 @@
 | `showStatus` | bool | | true | 状态环与控制中心入口 |
 | `showNotifications` | bool | | true | 通知入口；关闭入口不关闭通知来源 |
 | `textColor` | string | `auto` / `light` / `dark` | `auto` | 文字颜色；`auto` 按玻璃下方的实际亮度选择 |
+| `autoHide` | string | `never` / `fullscreen` / `always` | `fullscreen` | 栏的显示方式：常驻；全屏时隐藏（最大化或全屏的应用在前面时滑出屏幕）；一直隐藏。隐藏时，指针移到栏下方的屏幕底边栏就出现，离开后收回 |
+| `statusStyle` | string | `ring` / `icons` | `ring` | 状态栏的样子：Wi-Fi 外面一圈电量或音量的圆环；或者像 Windows 任务栏那样并排的网络、音量、电池三个图标（自绘，跟随字色）。点按都打开控制中心 |
 | `iconSize` | number | 16–64 DIP | 30 | 任务栏图标边长 |
 | `magnify` | number | 1–2 | 1.7 | 悬停放大：指针下图标的缩放倍数，相邻图标按波形放大；1 为关闭 |
+| `hoverRise` | bool | | true | 形状页的“跟随鼠标拱起”：背景随鼠标局部向上延伸，幅度复用 `magnify`；关闭后保持图标放大 |
 | `autoWidth` | bool | | true | 宽度随内容伸缩，最大为 `width` |
 | `showRunning` | bool | | true | 显示未固定但正在运行的应用 |
+| `dockDisplayMode` | string | `follow` / `primary` / `fixed` / `all` | `follow` | 单个 Dock 在其他屏幕底边停留后唤出；仅主屏；固定屏幕；或每个扩展显示器常驻一条任务栏 |
+| `dockDisplayDelay` | number | 100–2000 ms | 450 | 跨屏唤出的连续停留时间；拖动图标、文件或使用弹出面板时不切屏 |
+| `dockDisplay` | string | 显示器设备接口 ID，或空字符串 | `""` | `fixed` 模式的目标；空值跟随系统主屏；断开后临时使用主屏，保留 ID 供重连恢复 |
+| `desktopDisplay` | string | 显示器设备接口 ID，或空字符串 | `""` | 小组件与台前调度的屏幕，独立于 Dock；空值跟随系统主屏；切换前恢复原屏幕中台前调度收起的窗口 |
+| `taskbarApps` | string | `all` / `primaryAndWindow` / `window` | `all` | 运行中的应用分别显示在所有任务栏、系统主屏和窗口所在屏、或仅窗口所在屏；固定应用保留，运行标记和预览只使用符合规则的窗口 |
+| `taskbarRightPrimaryOnly` | bool | | false | 仅在系统主屏显示任务栏右侧元素；副屏隐藏托盘、状态圆环、时钟日期、通知入口及分隔线，不保留占位；各元素原有的显示开关保持不变，也适用于跨屏唤出和固定显示器模式 |
 | `notifyTimeout` | number | 3–30 s | 6 | 通知弹出后停留的时间（指针停在卡片上时不计时） |
+| `notifyPlacement` | string | `dock` / `topRight` | `dock` | 默认在任务栏上方堆叠；右上角模式下，弹窗和铃铛打开的通知中心均固定在系统主屏工作区右上角，新通知从右侧淡入，已有通知平滑下移；通知中心的操作区在列表上方，超出屏幕高度可滚动 |
 | `notifyHideBody` | bool | | false | 隐藏通知正文；同时把通知窗口排除在截图和屏幕共享之外 |
 | `notifyListener` | bool | | true | 通过 UserNotificationListener 把 Windows 通知显示为 Atrium 卡片（系统横幅仍会出现，除非用户在 Windows 里关闭该应用的横幅） |
 | `notifyWeChat` | bool | | true | 实验：读取微信窗口的会话列表（UI 自动化，只读），非免打扰会话有新的未读消息时显示卡片 |
@@ -44,12 +54,16 @@
 | `stageManager` | bool | | false | 台前调度：前台应用留在屏幕中间，其他应用的窗口先在后台拍下画面，再最小化（不激活），画面斜立在屏幕一侧；打开时桌面小组件排到台前调度的另一侧（Core 从栏上打开时同时写入 `widgetsOnRight`）；关闭或 Core 退出时全部恢复。Core 把收起的窗口记在 `%LOCALAPPDATA%\Atrium\stage.json`（窗口句柄、应用键与分组），异常退出后再次启动时接回仍处于最小化的窗口 |
 | `stageOnRight` | bool | | false | 台前调度的窗口放在屏幕右侧；默认左侧 |
 | `stageAutoHide` | bool | | false | 悬停弹出：台前调度平时隐藏，指针碰到那一侧的屏幕边缘时才滑出；默认常驻（窗口挡住时让开） |
-| `hideTaskbar` | bool | | false | Atrium 运行时隐藏系统任务栏（并设为自动隐藏），关闭或退出时恢复（D37） |
+| `hideTaskbar` | bool | | false | Atrium 运行时隐藏系统任务栏（并设为自动隐藏），关闭或退出时恢复（D37）。隐藏期间另有一个看护进程（`Atrium.exe --guard <pid>`）：Atrium 无论怎样结束（崩溃、被结束进程），它都立刻还原任务栏、自动隐藏设置和请勿打扰；Atrium 约 15 秒无响应时先显示任务栏 |
 | `hideBanners` | bool | | false | 打开“请勿打扰”（仅闹钟）去掉系统横幅，通知仍显示为 Atrium 卡片；关闭或退出时恢复（D37） |
+| `winKeyStart` | bool | | false | 单独按下 Win 键时打开 Atrium 的开始菜单，Windows 的开始菜单不出现。低级键盘钩子在单独的线程上先扣下 Win 键：后面跟了别的键（Win + E 等）就把两个键一起交给 Windows，单独松开则 Windows 始终没有收到它。前台是管理员权限的窗口时（补发的按键送不进去）不拦截。Win + L 由系统在钩子之前处理，不受影响。需要打开 `bar` |
+| `winNumbers` | bool | | false | Win + 1…9、0 打开栏上第 1…10 个应用，和点按它一样（没开就启动，开着就切换过去）。与 `winKeyStart` 共用同一个键盘钩子；只开这一项时，单独按 Win 仍交给 Windows。带 Shift、Ctrl、Alt 的组合照常交给 Windows。需要打开 `bar` |
 | `startOnLogin` | bool | | true | 当前用户开机自启：任务计划程序里当前用户的登录任务 `Atrium Startup-<SID>`（登录时随会话启动，不在 Explorer 的 Run 项队列里排队）；注册失败时退回 HKCU 的 Run 项。正式安装每次启动时，若此值为开且 Run 项没有在任务管理器里被关闭，就把旧版本的 Run 项换成登录任务；开发构建不修改开机项 |
 | `pins` | array | | 见下 | 固定的应用，按顺序显示 |
 
 `pins` 的每一项：`{"name": "显示名", "path": ".lnk / .exe 路径，可空", "args": "附加参数，可空", "aumid": "AppUserModelID，可空", "multipleWindows": false}`。`multipleWindows` 可省略，浏览器与 Windows 文件管理器默认允许新窗口，聊天、音乐及其他应用默认打开已有页面；中键与“打开新窗口”遵循此设置。浏览器仅按常用程序文件名识别（Chrome、Edge、Firefox、Brave、Opera、Vivaldi、Chromium），不扫描协议注册或按显示名推断。主窗口关闭到后台时，通过应用自己的托盘入口恢复，不强制显示隐藏窗口。识别同一应用时 `aumid` 优先，其次匹配启动器与实际程序；多个固定项共用的程序路径不作模糊归组。设置文件里**没有** `pins` 键时（首次运行），Core 导入用户当前 Windows 任务栏的固定项（`%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\*.lnk`），`get` 返回的 `current` / `saved` 中包含导入结果；保存后写入文件，之后不再导入。
+
+开始菜单的排列不在设置文件里，而是 Core 自己保存在同一目录的 `start.json`：`{"version":2,"size":"medium","tiles":[{"id":"应用 id","name":"名称"},{"id":"folder:1","name":"文件夹名","apps":[{"id":…,"name":…}]}]}`。`hidden` 是用户隐藏的应用 id（右键“隐藏”）：不出现在网格、文件夹和搜索里，只在“全部应用”末尾的“已隐藏”下面（右键开始菜单空白处“显示隐藏的应用”直接到那里），右键“取消隐藏”或“固定到开始菜单”恢复。`size` 是 `small`（7 × 3 格）、`medium`（9 × 4，默认）或 `large`（11 × 5；版本 1 的三档小一级，读入时换算），由菜单右上角的握把或右键空白处选择；屏幕放不下时用放得下的最大一档。应用 id 是 AppsFolder 里的解析名（AUMID、已知文件夹路径）或快捷方式的完整路径。没有 `tiles` 键时，菜单显示 Windows 开始菜单的固定项；用户第一次拖动、建文件夹、固定或移除时，把当时的固定项复制进来，之后与 Windows 的固定项互不影响；右键空白处“恢复为 Windows 开始菜单的固定项”删去 `tiles`。已卸载的应用不显示。
 
 预设只改材质键（transparency、blur、refraction、edge、dispersion、highlight、shadow、tint），不改布局与内容键。预设由 `BarSettings.cs` 的 `Liquid()` / `Frosted()` 定义，液态默认值与 `native/core/settings.h` 保持一致。
 

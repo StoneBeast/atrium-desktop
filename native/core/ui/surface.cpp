@@ -10,6 +10,7 @@
 #include "render/ui_font.h"
 #include "render/wifi_glyph.h"
 
+#include <d2d1effects.h>
 #include <dwmapi.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #pragma comment(lib, "dcomp.lib")
+#pragma comment(lib, "dxguid.lib") // CLSID_D2D1GaussianBlur
 
 namespace atrium {
 
@@ -363,6 +365,16 @@ IDWriteTextFormat* Canvas::Format(float px, DWRITE_FONT_WEIGHT w, bool glyph, in
     return f.get();
 }
 
+float Canvas::DarkAt(D2D1_RECT_F r) const
+{
+    if (ink.dark.empty())
+        return inkDark;
+    D2D1_RECT_F p = Px(r);
+    D2D1_MATRIX_3X2_F m;
+    d2d_->GetTransform(&m);
+    return ink.DarkAt(p.left * m._11 + m._31, p.top * m._22 + m._32, p.right * m._11 + m._31, p.bottom * m._22 + m._32, inkDark);
+}
+
 D2D1_COLOR_F Canvas::InkAt(D2D1_RECT_F r, D2D1_COLOR_F c, D2D1_COLOR_F& haloInk) const
 {
     haloInk = theme.halo;
@@ -545,6 +557,42 @@ void Canvas::Ripple(D2D1_RECT_F r, float radius, float x, float y, float t, D2D1
         FAILED(d2d_->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(centre, D2D1::Point2F(), rr, rr), coll.get(), brush.put())))
         return;
     FillContinuousRect(d2d_, p, radius * scale, brush.get());
+}
+
+void Canvas::BeginBlur()
+{
+    // Recorded into a command list, drawn through a Gaussian blur at EndBlur.
+    blurList_ = nullptr;
+    blurTarget_ = nullptr;
+    if (FAILED(d2d_->CreateCommandList(blurList_.put())))
+        return;
+    d2d_->GetTarget(blurTarget_.put());
+    d2d_->SetTarget(blurList_.get());
+}
+
+void Canvas::EndBlur(float radius)
+{
+    if (!blurList_ || !blurTarget_)
+        return;
+    d2d_->SetTarget(blurTarget_.get());
+    winrt::com_ptr<ID2D1CommandList> list = std::move(blurList_);
+    blurTarget_ = nullptr;
+    if (FAILED(list->Close()))
+        return;
+    D2D1_MATRIX_3X2_F transform;
+    d2d_->GetTransform(&transform);
+    d2d_->SetTransform(D2D1::Matrix3x2F::Identity()); // the commands carry their own transforms
+    if (radius > 0.05f && (s_.blur_ || SUCCEEDED(d2d_->CreateEffect(CLSID_D2D1GaussianBlur, s_.blur_.put())))) {
+        s_.blur_->SetInput(0, list.get());
+        s_.blur_->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, radius * scale);
+        s_.blur_->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
+        s_.blur_->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED); // downsampled: a frame's budget
+        d2d_->DrawImage(s_.blur_.get());
+        s_.blur_->SetInput(0, nullptr);
+    } else {
+        d2d_->DrawImage(list.get());
+    }
+    d2d_->SetTransform(transform);
 }
 
 void Canvas::Clip(D2D1_RECT_F r) { d2d_->PushAxisAlignedClip(Px(r), D2D1_ANTIALIAS_MODE_ALIASED); }
@@ -944,6 +992,32 @@ void Surface::ApplyPlacement()
     }
     SetWindowPos(hwnd_, desktopLayer_ ? nullptr : HWND_TOPMOST, window_.left, window_.top, window_.right - window_.left, window_.bottom - window_.top,
                  SWP_NOACTIVATE | (desktopLayer_ ? SWP_NOZORDER : 0));
+    ApplyRegion();
+}
+
+void Surface::SetRegion(D2D1_RECT_F dip)
+{
+    region_ = dip;
+    ApplyRegion();
+}
+
+void Surface::ApplyRegion()
+{
+    if (desktopLayer_)
+        return; // its own region (ApplyPlacement)
+    RECT r{};
+    if (region_.right > region_.left && region_.bottom > region_.top) {
+        const int inset = InsetPx();
+        r = RECT{LONG(std::floor(region_.left * scale_)), LONG(std::floor(region_.top * scale_)), LONG(std::ceil(region_.right * scale_)) + 2 * inset,
+                 LONG(std::ceil(region_.bottom * scale_)) + 2 * inset};
+    }
+    if (EqualRect(&r, &inputRegion_))
+        return;
+    HRGN shape = IsRectEmpty(&r) ? nullptr : CreateRectRgn(r.left, r.top, r.right, r.bottom);
+    if (SetWindowRgn(hwnd_, shape, FALSE))
+        inputRegion_ = r; // Windows owns the region after success
+    else if (shape)
+        DeleteObject(shape);
 }
 
 void Surface::Show(RECT rect, bool activate, POINT anchor, bool pop)

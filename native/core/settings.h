@@ -34,6 +34,7 @@ struct Settings {
     double margin = 10;              // gap above the bottom of the work area
     double iconSize = 30;
     double magnify = 1.7;            // dock magnification under the pointer: icon scale, 1 = off
+    bool hoverRise = true;           // glass rises with the pointer's magnification wave
     bool autoWidth = true;           // shrink to the content
     bool showClock = true;
     bool showTray = true;
@@ -41,8 +42,20 @@ struct Settings {
     bool showNotifications = true;
     bool showRunning = true;
     std::wstring textColor = L"auto"; // auto | light | dark
+    // When the bar steps out of the way: never | fullscreen (a maximized or full-screen app is in
+    // front) | always (it waits below the screen's bottom edge). The pointer there brings it up.
+    std::wstring autoHide = L"fullscreen";
+    std::wstring statusStyle = L"ring"; // the status entry: ring (a ring round the Wi-Fi fan) | icons (network, volume, battery)
+    // One Dock, summoned at another display's bottom edge, as on macOS.
+    std::wstring dockDisplayMode = L"follow"; // follow | primary | fixed | all
+    double dockDisplayDelay = 450;   // milliseconds at another display's bottom edge (100..2000)
+    std::wstring dockDisplay;        // fixed display's device-interface ID
+    std::wstring desktopDisplay;     // widgets and Stage Manager; empty follows the system primary
+    std::wstring taskbarApps = L"all"; // all | primaryAndWindow | window
+    bool taskbarRightPrimaryOnly = false; // hide the right-side group on non-primary displays
     // Notifications (Atrium's own cards above the bell).
     double notifyTimeout = 6;        // seconds a popup stays (3..30)
+    std::wstring notifyPlacement = L"dock"; // dock (default) | topRight (system primary)
     bool notifyHideBody = false;     // privacy: no message text; cards excluded from screen capture
     bool notifyListener = true;      // Windows notifications as Atrium cards (UserNotificationListener)
     bool notifyFeishu = true;        // Feishu messages as Atrium cards (its own popup, read through UI Automation)
@@ -63,6 +76,8 @@ struct Settings {
     // Windows' own shell (shell/system_chrome.h): put back when turned off or on exit.
     bool hideTaskbar = false;        // the system taskbar is hidden while Atrium runs
     bool hideBanners = false;        // Do Not Disturb: no system banners, the notifications still become cards
+    bool winKeyStart = false;        // the Windows key alone opens Atrium's start menu instead of Windows'
+    bool winNumbers = false;         // Win + 1..9, 0 open the bar's apps
     bool startOnLogin = true;        // independent of starting/stopping the current session
     // Pinned apps; nullopt = never saved yet (first run imports the Windows pins).
     std::optional<std::vector<PinnedApp>> pins;

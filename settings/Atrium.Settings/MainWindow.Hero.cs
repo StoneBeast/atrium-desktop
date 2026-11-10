@@ -33,7 +33,7 @@ public sealed partial class MainWindow
         bool Clock, double ClockX, double ClockW, double TimePx, double DatePx, double SepX,
         double StartX, double TrayX, double StatusX, double BellX,
         double K, double Centre, double Range,
-        double LoupeX0, double LoupeY0, double LoupeW, double LoupeH)
+        double LoupeX0, double LoupeY0, double LoupeW, double LoupeH, double StatusExtra = 0)
     {
         public double PlateX(int i) => BaseX + (AppsLeft + i * Pitch) * S;
 
@@ -148,7 +148,8 @@ public sealed partial class MainWindow
         double timePx = H * 0.25, datePx = H * 0.19, sepGap = 8;
         double clockW = s.ShowClock ? Math.Max(timePx * 2.75, datePx * 5.7) + 22 : 0;
         int rightCount = (s.ShowTray ? 1 : 0) + (s.ShowStatus ? 1 : 0) + (s.ShowNotifications ? 1 : 0) + (s.ShowClock ? 1 : 0);
-        double rightW = (rightCount - (s.ShowClock ? 1 : 0)) * P + clockW + Math.Max(0, rightCount - 1) * gap;
+        double statusExtra = s.StatusStyle == "icons" ? Math.Round(I * 1.3) : 0; // three icons: about an icon wider
+        double rightW = (rightCount - (s.ShowClock ? 1 : 0)) * P + (s.ShowStatus ? statusExtra : 0) + clockW + Math.Max(0, rightCount - 1) * gap;
         double Content(int n) => Math.Max(2 * H, 2 * pad + P + 2 * gap + n * P + Math.Max(0, n - 1) * gap + (rightCount > 0 ? 2 * sepGap + rightW : 0));
         double mag = Math.Clamp(s.Magnify, 1, 2), pitch = P + gap;
         double stretch = mag > 1.001 ? Math.Ceiling((mag - 1) * pitch * 2.3) : 0;
@@ -167,7 +168,7 @@ public sealed partial class MainWindow
             return x;
         }
         double bellLeft = Slot(P, s.ShowNotifications), clockLeft = Slot(clockW, s.ShowClock);
-        double statusLeft = Slot(P, s.ShowStatus), trayLeft = Slot(P, s.ShowTray);
+        double statusLeft = Slot(P + statusExtra, s.ShowStatus), trayLeft = Slot(P, s.ShowTray);
         double rightLeft = rightCount > 0 ? cursor + gap : barW - pad;
         double appsMin = pad + P + 2 * gap;
         double appsLeft = appsMin + Math.Max(0, (rightLeft - (rightCount > 0 ? 2 * sepGap : 0) - appsMin - (n * P + Math.Max(0, n - 1) * gap)) / 2);
@@ -195,7 +196,7 @@ public sealed partial class MainWindow
             clockW > 0, X(clockLeft), clockW * S, timePx * S, datePx * S, rightCount > 0 ? bx + (rightLeft - sepGap) * S : -1,
             bx + pad * S, X(trayLeft), X(statusLeft), X(bellLeft),
             k, centre, range,
-            right - (lw - 10) * S, by - 10 * S, lw * S, lh * S);
+            right - (lw - 10) * S, by - 10 * S, lw * S, lh * S, statusExtra * S);
     }
 
     private void UpdateHero()
@@ -335,19 +336,27 @@ public sealed partial class MainWindow
             _heroPhotoGen = j.PhotoGeneration;
             Interlocked.Exchange(ref _photoPending, _mainBg);
         }
-        var spec = GlassSpec.For(j.S, L.S * j.Rs);
+        // Keep the specimen and loupe in step with the native hover-rise switch.
+        GlassSpec Spec(double ppd) => GlassSpec.For(j.S, L.S * ppd) with
+        {
+            WaveX = (float)((L.Centre - L.BarX - L.BarW / 2) * ppd),
+            WaveWidth = (float)(L.Range * (1 + L.K / 2) * ppd),
+            WaveHeight = j.S.HoverRise ? (float)(L.Icon * L.K * ppd) : 0,
+        };
+        var spec = Spec(j.Rs);
         int inset = (int)spec.Inset;
+        int rise = spec.RiseInset;
         int bx = (int)Math.Round(L.BarX * j.Rs), by = (int)Math.Round(L.BarY * j.Rs);
         int bw = (int)Math.Round(L.BarW * j.Rs), bh = (int)Math.Round(L.BarH * j.Rs);
-        int gw = bw + 2 * inset, gh = bh + 2 * inset;
+        int gw = bw + 2 * inset, gh = bh + 2 * inset + rise;
         var frames = _heroFrames;
         if (frames == null || frames.Width != gw || frames.Height != gh)
             _heroFrames = frames = new FrameBuffers(gw, gh);
         Array.Clear(frames.Back);
-        GlassRenderer.DrawOverlay(_mainBg, frames.Back, bx - inset, by - inset, gw, gh, spec);
-        float luma = GlassRenderer.MeanLuma(frames.Back, gw, inset + Math.Clamp(bh / 2, 0, bw - 1), inset + bh / 4,
-            inset + Math.Clamp(bw - bh / 2, 1, bw), inset + Math.Max(bh * 3 / 4, bh / 4 + 1));
-        frames.Publish(luma, (bx - inset) / j.Rs, (by - inset) / j.Rs, j.Rs);
+        GlassRenderer.DrawOverlay(_mainBg, frames.Back, bx - inset, by - inset - rise, gw, gh, spec);
+        float luma = GlassRenderer.MeanLuma(frames.Back, gw, inset + Math.Clamp(bh / 2, 0, bw - 1), inset + rise + bh / 4,
+            inset + Math.Clamp(bw - bh / 2, 1, bw), inset + rise + Math.Max(bh * 3 / 4, bh / 4 + 1));
+        frames.Publish(luma, (bx - inset) / j.Rs, (by - inset - rise) / j.Rs, j.Rs);
 
         // Only the material page with the loupe enabled needs its second render.
         int lw = j.Loupe ? (int)Math.Round(Math.Round(L.LoupeW * LoupeZoom) * j.Rs) : 0, lh = j.Loupe ? (int)Math.Round(Math.Round(L.LoupeH * LoupeZoom) * j.Rs) : 0;
@@ -364,11 +373,12 @@ public sealed partial class MainWindow
             if (lframes == null || lframes.Width != lw || lframes.Height != lh)
                 _loupeFrames = lframes = new FrameBuffers(lw, lh);
             Buffer.BlockCopy(_loupeBg.Base, 0, lframes.Back, 0, _loupeBg.Base.Length);
-            var lspec = GlassSpec.For(j.S, L.S * ppd);
+            var lspec = Spec(ppd);
             int linset = (int)lspec.Inset;
             int lbx = (int)Math.Round((L.BarX - L.LoupeX0) * ppd), lby = (int)Math.Round((L.BarY - L.LoupeY0) * ppd);
             int lbw = (int)Math.Round(L.BarW * ppd), lbh = (int)Math.Round(L.BarH * ppd);
-            GlassRenderer.Draw(_loupeBg, lframes.Back, lbx - linset, lby - linset, lbw + 2 * linset, lbh + 2 * linset, lspec);
+            GlassRenderer.Draw(_loupeBg, lframes.Back, lbx - linset, lby - linset - lspec.RiseInset,
+                lbw + 2 * linset, lbh + 2 * linset + lspec.RiseInset, lspec);
             lframes.Publish(luma);
         }
         else

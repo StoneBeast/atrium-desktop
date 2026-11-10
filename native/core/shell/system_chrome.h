@@ -6,7 +6,8 @@
 // notifications still reach the notification centre, where the listener reads
 // them for Atrium's cards). Everything is put back when the setting is turned
 // off or Atrium exits; what was changed is kept in system.json, so a run that
-// did not end cleanly is undone by the next start.
+// did not end cleanly is undone by the next start, or at once by the guard
+// (`Atrium.exe --guard`, main.cpp) that watches a run hiding them.
 #pragma once
 
 #include <windows.h>
@@ -35,6 +36,11 @@ public:
     // From a crash handler: stops hiding, restores our auto-hide change and
     // shows the taskbars (no allocation, no COM).
     static void EmergencyRestore();
+    // What a run that did not end cleanly left changed (system.json), put back; false if nothing
+    // was. COM must be initialised (Do Not Disturb).
+    static bool UndoLeftover();
+    // The taskbars shown, nothing else changed (Atrium is not responding).
+    static void ShowTaskbarsNow();
 
 private:
     void HideTaskbars();

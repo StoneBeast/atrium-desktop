@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../settings/Atrium.Settings/BarSettings.cs" Link="BarSettings.cs" />
+    <Compile Include="../../settings/Atrium.Settings/DesktopDisplay.cs" Link="DesktopDisplay.cs" />
+  </ItemGroup>
+</Project>

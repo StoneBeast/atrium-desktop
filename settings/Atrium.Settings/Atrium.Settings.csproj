@@ -21,7 +21,7 @@
     <DefineConstants Condition="'$(AtriumDevelopment)' == 'true'">$(DefineConstants);ATRIUM_DEVELOPMENT</DefineConstants>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\assets\atrium.ico</ApplicationIcon>
-    <Version>2.2.0</Version>
+    <Version>2.3.0</Version>
     <Product>Atrium Desktop</Product>
     <Copyright>MIT License</Copyright>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>

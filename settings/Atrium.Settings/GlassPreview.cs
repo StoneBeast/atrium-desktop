@@ -69,9 +69,11 @@ internal sealed class Backdrop
 // GlassParams of glass.hlsl, in pixels of the target bitmap.
 internal readonly record struct GlassSpec(
     float Radius, float Edge, float Refract, float Dispersion, float BlurLod, float BlurMix,
-    float TintMix, Vector3 Tint, float Highlight, float Shadow, float Inset, float Rim = 1)
+    float TintMix, Vector3 Tint, float Highlight, float Shadow, float Inset, float Rim = 1,
+    float WaveX = 0, float WaveWidth = 0, float WaveHeight = 0)
 {
     public const double InsetDip = 14; // kInsetDip in bar.cpp: room for the drop shadow
+    public int RiseInset => (int)MathF.Ceiling(WaveHeight); // extra room above the base shape
 
     // Mirror of ParamsFor() in bar.cpp. `scale` = target pixels per real DIP of the bar.
     public static GlassSpec For(BarSettings s, double scale)
@@ -163,14 +165,14 @@ internal static class GlassRenderer
                             GlassSpec p, int ly)
     {
         float W = winW, H = winH, inset = p.Inset;
-        float bx = W * 0.5f - inset, by = H * 0.5f - inset;
+        float bx = W * 0.5f - inset, by = (H - p.RiseInset) * 0.5f - inset;
         float r = MathF.Min(p.Radius, MathF.Min(bx, by));
         var corner = CornerProfile.For(bx * 2, by * 2, r);
-        float py = ly + 0.5f, cy = py - H * 0.5f;
+        float py = ly + 0.5f, cy = py - (H + p.RiseInset) * 0.5f;
         float shadowK = 1f / MathF.Max(inset * 0.35f, 1f);
         float edge = MathF.Max(p.Edge, 1f);
         float blurStep = MathF.Pow(2f, p.BlurLod) * 0.75f;
-        float sheenT = Sat(1 - (py - inset) / MathF.Max(H - 2 * inset, 1f));
+        float sheenT = Sat(1 - (py - inset - p.RiseInset) / MathF.Max(2 * by, 1f));
         float sheen = p.Highlight * 0.045f * sheenT * sheenT;
         int xs = Math.Max(0, -winX), xe = Math.Min(winW, bg.Width - winX);
         int rowBase = (dstY + ly) * stride + dstX;
@@ -179,8 +181,9 @@ internal static class GlassRenderer
         for (int lx = xs; lx < xe; lx++)
         {
             float px = lx + 0.5f, cx = px - W * 0.5f;
-            float d = Sd(cx, cy, bx, by, r);
-            float ds = Sd(cx, cy - inset * 0.25f, bx, by, r);
+            float y = WaveY(cx, cy, by, p);
+            float d = Sd(cx, y, bx, by, r);
+            float ds = Sd(cx, WaveY(cx, cy - inset * 0.25f, by, p), bx, by, r);
             float shadowA = d >= 0 ? p.Shadow * MathF.Exp(-MathF.Max(ds, 0) * shadowK) : 0;
             int di = (rowBase + lx) * 4;
 
@@ -198,15 +201,26 @@ internal static class GlassRenderer
             }
 
             const float e = 1f;
-            float gx = Sd(cx + e, cy, bx, by, r) - Sd(cx - e, cy, bx, by, r);
-            float gy = Sd(cx, cy + e, bx, by, r) - Sd(cx, cy - e, bx, by, r);
+            float yr = WaveY(cx + e, cy, by, p), yl = WaveY(cx - e, cy, by, p);
+            float yd = WaveY(cx, cy + e, by, p), yu = WaveY(cx, cy - e, by, p);
+            float gx = Sd(cx + e, yr, bx, by, r) - Sd(cx - e, yl, bx, by, r);
+            float gy = Sd(cx, yd, bx, by, r) - Sd(cx, yu, bx, by, r);
             float gl = MathF.Sqrt(gx * gx + gy * gy);
             float nx = 0, ny = 0;
             if (gl > 1e-5f) { nx = gx / gl; ny = gy / gl; }
 
             float aa = MathF.Max(MathF.Abs(nx) + MathF.Abs(ny), 1e-3f); // fwidth(d)
-            float edgeDistance = corner.Edge(MathF.Abs(cx) - bx + corner.Reach, MathF.Abs(cy) - by + corner.Reach);
-            float cov = Sat(0.5f - edgeDistance / aa);
+            float edgeDistance = corner.Edge(MathF.Abs(cx) - bx + corner.Reach, MathF.Abs(y) - by + corner.Reach);
+            if (p.WaveHeight > 0 && d >= -2)
+            {
+                // The deformed outline needs the implicit field's screen-space gradient.
+                float ex = corner.Edge(MathF.Abs(cx + e) - bx + corner.Reach, MathF.Abs(yr) - by + corner.Reach) -
+                           corner.Edge(MathF.Abs(cx - e) - bx + corner.Reach, MathF.Abs(yl) - by + corner.Reach);
+                float ey = corner.Edge(MathF.Abs(cx) - bx + corner.Reach, MathF.Abs(yd) - by + corner.Reach) -
+                           corner.Edge(MathF.Abs(cx) - bx + corner.Reach, MathF.Abs(yu) - by + corner.Reach);
+                aa = MathF.Max((MathF.Abs(ex) + MathF.Abs(ey)) / 2, 1e-3f);
+            }
+            float cov = p.WaveHeight > 0 && d < -2 ? 1 : Sat(0.5f - edgeDistance / aa);
             if (cov <= 0)
             {
                 if (overlay) { dst[di + 3] = To8(shadowA); continue; }
@@ -291,6 +305,16 @@ internal static class GlassRenderer
                 n++;
             }
         return n == 0 ? 0.5f : (float)(sum / n / 255.0);
+    }
+
+    // Same C3 bump as glass.hlsl; x and y are relative to the base shape's centre.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float WaveY(float x, float y, float by, GlassSpec p)
+    {
+        if (p.WaveHeight <= 0) return y;
+        float u = (x - p.WaveX) / MathF.Max(p.WaveWidth, 1);
+        float w = Sat(1 - u * u), lift = p.WaveHeight * w * w * w * w;
+        return y + (by - y) * lift / (MathF.Max(2 * by, 1) + lift);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

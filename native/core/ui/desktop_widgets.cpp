@@ -323,9 +323,9 @@ void DesktopWidgets::SetEnabled(bool on)
     }
 }
 
-void DesktopWidgets::SetMonitor(HMONITOR monitor)
+void DesktopWidgets::SetMonitor(HMONITOR monitor, bool refresh)
 {
-    if (monitor == monitor_)
+    if (monitor == monitor_ && !refresh)
         return;
     monitor_ = monitor;
     if (enabled_)

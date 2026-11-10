@@ -183,11 +183,15 @@ void StageManager::SetAutoHide(bool autoHide)
         Watch();
 }
 
-void StageManager::SetMonitor(HMONITOR monitor)
+void StageManager::SetMonitor(HMONITOR monitor, bool refresh)
 {
-    if (monitor == monitor_)
+    if (monitor == monitor_ && !refresh)
         return;
+    // Release windows on the old display before managing another one.
+    if (monitor != monitor_ && monitor_)
+        RestoreAll();
     monitor_ = monitor;
+    coveredAt_ = 0;
     Rebuild();
 }
 

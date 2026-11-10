@@ -105,17 +105,25 @@ SystemChrome::SystemChrome()
     g_chrome = this;
     // Left over from a run that did not end cleanly: put it back first (the
     // settings then hide again what they ask for).
-    std::wstring left = ReadTextFile(StatePath());
-    if (!left.empty()) {
-        Log(L"chrome: undoing the last run's changes: %s", left.c_str());
-        if (left.find(L"\"autoHide\":true") != std::wstring::npos)
-            SetAutoHide(false);
-        ShowTaskbars();
-        if (left.find(L"\"quiet\":true") != std::wstring::npos && QuietProfile() == kQuiet)
-            SetQuietProfile(kUnrestricted);
-        DeleteFileW(StatePath().c_str());
-    }
+    UndoLeftover();
 }
+
+bool SystemChrome::UndoLeftover()
+{
+    std::wstring left = ReadTextFile(StatePath());
+    if (left.empty())
+        return false;
+    Log(L"chrome: undoing the last run's changes: %s", left.c_str());
+    if (left.find(L"\"autoHide\":true") != std::wstring::npos)
+        SetAutoHide(false);
+    ShowTaskbars();
+    if (left.find(L"\"quiet\":true") != std::wstring::npos && QuietProfile() == kQuiet)
+        SetQuietProfile(kUnrestricted);
+    DeleteFileW(StatePath().c_str());
+    return true;
+}
+
+void SystemChrome::ShowTaskbarsNow() { ShowTaskbars(); }
 
 SystemChrome::~SystemChrome()
 {

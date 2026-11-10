@@ -37,6 +37,7 @@ internal sealed class BarSettings
     public double Margin { get; set; } = 10;
     public double IconSize { get; set; } = 30;
     public double Magnify { get; set; } = 1.7;         // icon scale under the pointer, 1 = off
+    public bool HoverRise { get; set; } = true;       // glass follows the magnification wave
     public bool AutoWidth { get; set; } = true;
     public bool ShowClock { get; set; } = true;
     public bool ShowTray { get; set; } = true;
@@ -44,7 +45,16 @@ internal sealed class BarSettings
     public bool ShowNotifications { get; set; } = true;
     public bool ShowRunning { get; set; } = true;
     public string TextColor { get; set; } = "auto"; // auto | light | dark
+    public string AutoHide { get; set; } = "fullscreen"; // never | fullscreen (a maximized or full-screen app in front) | always
+    public string StatusStyle { get; set; } = "ring"; // ring | icons (network, volume, battery as on the Windows taskbar)
+    public string DockDisplayMode { get; set; } = "follow"; // one Dock: follow | primary | fixed
+    public double DockDisplayDelay { get; set; } = 450; // milliseconds at another display's bottom edge
+    public string DockDisplay { get; set; } = "";
+    public string DesktopDisplay { get; set; } = ""; // empty follows the system primary
+    public string TaskbarApps { get; set; } = "all"; // all | primaryAndWindow | window
+    public bool TaskbarRightPrimaryOnly { get; set; } // hide the right-side group on non-primary displays
     public double NotifyTimeout { get; set; } = 6;    // seconds a popup stays
+    public string NotifyPlacement { get; set; } = "dock"; // dock (default) | topRight
     public bool NotifyHideBody { get; set; }           // privacy: no message text, excluded from capture
     public bool NotifyListener { get; set; } = true;   // Windows notifications as Atrium cards
     public bool NotifyFeishu { get; set; } = true;     // Feishu messages as Atrium cards (its own popup, read only)
@@ -59,6 +69,8 @@ internal sealed class BarSettings
     public string WidgetMaterial { get; set; } = "glass"; // glass (the bar's) | dusk (dimmed glass, white ink) | color (their own faces)
     public bool HideTaskbar { get; set; }              // the system taskbar is hidden while Atrium runs
     public bool HideBanners { get; set; }              // Do Not Disturb: no system banners, notifications still become cards
+    public bool WinKeyStart { get; set; }              // the Windows key alone opens Atrium's start menu
+    public bool WinNumbers { get; set; }               // Win + 1..9, 0 open the bar's apps
     public bool StartOnLogin { get; set; } = true;
     // Null = the key was absent (never saved); the core then imports the Windows pins.
     public List<PinnedApp>? Pins { get; set; }
@@ -111,6 +123,7 @@ internal sealed class BarSettings
             ["margin"] = Margin,
             ["iconSize"] = IconSize,
             ["magnify"] = Magnify,
+            ["hoverRise"] = HoverRise,
             ["showClock"] = ShowClock,
             ["showTray"] = ShowTray,
             ["showStatus"] = ShowStatus,
@@ -118,7 +131,16 @@ internal sealed class BarSettings
             ["autoWidth"] = AutoWidth,
             ["showRunning"] = ShowRunning,
             ["textColor"] = TextColor,
+            ["autoHide"] = AutoHide,
+            ["statusStyle"] = StatusStyle,
+            ["dockDisplayMode"] = DockDisplayMode,
+            ["dockDisplayDelay"] = DockDisplayDelay,
+            ["dockDisplay"] = DockDisplay,
+            ["desktopDisplay"] = DesktopDisplay,
+            ["taskbarApps"] = TaskbarApps,
+            ["taskbarRightPrimaryOnly"] = TaskbarRightPrimaryOnly,
             ["notifyTimeout"] = NotifyTimeout,
+            ["notifyPlacement"] = NotifyPlacement,
             ["notifyHideBody"] = NotifyHideBody,
             ["notifyListener"] = NotifyListener,
             ["notifyWeChat"] = NotifyWeChat,
@@ -133,6 +155,8 @@ internal sealed class BarSettings
             ["widgetMaterial"] = WidgetMaterial,
             ["hideTaskbar"] = HideTaskbar,
             ["hideBanners"] = HideBanners,
+            ["winKeyStart"] = WinKeyStart,
+            ["winNumbers"] = WinNumbers,
             ["startOnLogin"] = StartOnLogin,
         };
         if (Pins != null)
@@ -174,6 +198,7 @@ internal sealed class BarSettings
             uint.TryParse(ts.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var tint))
             s.Tint = tint;
         bool Flag(string k, bool d) => o?[k] is JsonValue v && v.TryGetValue(out bool b) ? b : d;
+        s.HoverRise = Flag("hoverRise", f.HoverRise);
         s.ShowClock = Flag("showClock", f.ShowClock);
         s.ShowTray = Flag("showTray", f.ShowTray);
         s.ShowStatus = Flag("showStatus", f.ShowStatus);
@@ -200,10 +225,27 @@ internal sealed class BarSettings
             ? wms : f.WidgetMaterial;
         s.HideTaskbar = Flag("hideTaskbar", f.HideTaskbar);
         s.HideBanners = Flag("hideBanners", f.HideBanners);
+        s.WinKeyStart = Flag("winKeyStart", f.WinKeyStart);
+        s.WinNumbers = Flag("winNumbers", f.WinNumbers);
         s.StartOnLogin = Flag("startOnLogin", f.StartOnLogin);
+        string Display(string key, string value) => o?[key] is JsonValue v && v.TryGetValue(out string? text) && text != null ? text : value;
+        string mode = Display("dockDisplayMode", f.DockDisplayMode);
+        s.DockDisplayMode = mode is "primary" or "fixed" or "all" ? mode : "follow";
+        s.DockDisplayDelay = Math.Clamp(Num("dockDisplayDelay", f.DockDisplayDelay), 100, 2000);
+        s.DockDisplay = Display("dockDisplay", f.DockDisplay);
+        s.DesktopDisplay = Display("desktopDisplay", f.DesktopDisplay);
+        string apps = Display("taskbarApps", f.TaskbarApps);
+        s.TaskbarApps = apps is "primaryAndWindow" or "window" ? apps : "all";
+        s.TaskbarRightPrimaryOnly = Flag("taskbarRightPrimaryOnly", f.TaskbarRightPrimaryOnly);
+        s.NotifyPlacement = Display("notifyPlacement", f.NotifyPlacement) == "topRight" ? "topRight" : "dock";
         s.TextColor = o?["textColor"] is JsonValue tc && tc.TryGetValue(out string? tcs) && tcs != null
             ? (tcs is "light" or "dark" ? tcs : "auto")
             : f.TextColor;
+        s.AutoHide = o?["autoHide"] is JsonValue ah && ah.TryGetValue(out string? ahs) && ahs != null
+            ? (ahs is "never" or "always" ? ahs : "fullscreen")
+            : f.AutoHide;
+        s.StatusStyle = o?["statusStyle"] is JsonValue ss && ss.TryGetValue(out string? sss) && sss == "icons" ? "icons"
+            : o?["statusStyle"] is JsonValue ? "ring" : f.StatusStyle;
         s.Pins = f.Pins == null ? null : new List<PinnedApp>(f.Pins);
         if (o?["pins"] is JsonArray arr)
         {
@@ -224,14 +266,17 @@ internal sealed class BarSettings
 
     public bool SameAs(BarSettings o) =>
         SameMaterial(o) && Preset == o.Preset && CornerRadius == o.CornerRadius && Width == o.Width && Height == o.Height &&
-        Margin == o.Margin && IconSize == o.IconSize && Magnify == o.Magnify && AutoWidth == o.AutoWidth && ShowClock == o.ShowClock &&
+        Margin == o.Margin && IconSize == o.IconSize && Magnify == o.Magnify && HoverRise == o.HoverRise && AutoWidth == o.AutoWidth && ShowClock == o.ShowClock &&
         ShowTray == o.ShowTray && ShowStatus == o.ShowStatus && ShowNotifications == o.ShowNotifications &&
-        ShowRunning == o.ShowRunning && TextColor == o.TextColor && NotifyTimeout == o.NotifyTimeout && NotifyHideBody == o.NotifyHideBody &&
+        ShowRunning == o.ShowRunning && TextColor == o.TextColor && AutoHide == o.AutoHide && StatusStyle == o.StatusStyle && NotifyTimeout == o.NotifyTimeout && NotifyHideBody == o.NotifyHideBody &&
         NotifyListener == o.NotifyListener && NotifyWeChat == o.NotifyWeChat && NotifyFeishu == o.NotifyFeishu && Bar == o.Bar && Widgets == o.Widgets &&
         WidgetsOnRight == o.WidgetsOnRight && WidgetBackdrop == o.WidgetBackdrop && StageManager == o.StageManager && StageOnRight == o.StageOnRight &&
         StageAutoHide == o.StageAutoHide && WidgetMaterial == o.WidgetMaterial &&
-        HideTaskbar == o.HideTaskbar && HideBanners == o.HideBanners &&
+        HideTaskbar == o.HideTaskbar && HideBanners == o.HideBanners && WinKeyStart == o.WinKeyStart && WinNumbers == o.WinNumbers &&
         StartOnLogin == o.StartOnLogin &&
+        DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
+        TaskbarApps == o.TaskbarApps && TaskbarRightPrimaryOnly == o.TaskbarRightPrimaryOnly &&
+        NotifyPlacement == o.NotifyPlacement &&
         (Pins == o.Pins || (Pins != null && o.Pins != null && Pins.SequenceEqual(o.Pins)));
 
     public bool SameMaterial(BarSettings o) =>

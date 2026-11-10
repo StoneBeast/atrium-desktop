@@ -65,7 +65,7 @@ public sealed partial class MainWindow : Window
 
     private static readonly string[] PageTitles =
     {
-        "材质", "形状", "任务栏", "通知", "小组件", "台前调度", "系统", "设计语言", "关于",
+        "材质", "形状", "任务栏", "通知", "小组件", "台前调度", "显示器", "系统", "设计语言", "关于",
     };
     private readonly CoreClient _client = new();
     private readonly List<(SliderDef Def, SliderTile Tile)> _rows = new();
@@ -110,7 +110,9 @@ public sealed partial class MainWindow : Window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _updateMessage = (handle, message, wparam, lparam, id, data) =>
         {
-            if (message == App.OpenAboutMessage) { Nav.SelectedIndex = 8; return IntPtr.Zero; }
+            if (message == App.OpenAboutMessage) { Nav.SelectedIndex = 9; return IntPtr.Zero; }
+            if (message is 0x007E or 0x02E0 || (message == 0x001A && wparam.ToUInt64() == 0x002F))
+                DispatcherQueue.TryEnqueue(RefreshDisplays); // hotplug, DPI or work-area changed
             return DefSubclassProc(handle, message, wparam, lparam);
         };
         SetWindowSubclass(hwnd, _updateMessage, (UIntPtr)1, UIntPtr.Zero);
@@ -133,8 +135,9 @@ public sealed partial class MainWindow : Window
             StopTiles();
         };
 
-        _mains = new FrameworkElement[] { MainMaterial, MainShape, MainDock, MainNotify, MainWidgets, MainStage, MainSystem, DesignStack, MainAbout };
-        _sides = new FrameworkElement?[] { SideMaterial, SideShape, SideDock, SideNotify, SideWidgets, SideStage, null, null, null };
+        _mains = new FrameworkElement[] { MainMaterial, MainShape, MainDock, MainNotify, MainWidgets, MainStage, MainDisplays, MainSystem, DesignStack, MainAbout };
+        _sides = new FrameworkElement?[] { SideMaterial, SideShape, SideDock, SideNotify, SideWidgets, SideStage, null, null, null, null };
+        InitDisplays();
         LoupeSwitch.IsOn = true;
         BuildRows();
         BuildTintSwatches();
@@ -155,7 +158,7 @@ public sealed partial class MainWindow : Window
         // `--page widgets` (the widgets' menu): open on that page.
         var args = Environment.GetCommandLineArgs();
         int page = Array.IndexOf(args, "--page") is int i && i >= 0 && i + 1 < args.Length
-            ? args[i + 1] switch { "widgets" => 4, "stage" => 5, "about" => 8, _ => 0 } : 0;
+            ? args[i + 1] switch { "dock" => 2, "widgets" => 4, "stage" => 5, "displays" => 6, "system" => 7, "about" => 9, _ => 0 } : 0;
         Nav.SelectedIndex = page;
         _ = ConnectAndLoadAsync();
         _ = CheckForUpdatesAsync(); // once per settings window; no resident polling
@@ -172,7 +175,7 @@ public sealed partial class MainWindow : Window
     // inspector part; pages without parameters of their own (system, design, about) take the full width.
     private void ShowPage(int index)
     {
-        if (_page == 7 && index != 7) StopDesignAnimations();
+        if (_page == 8 && index != 8) StopDesignAnimations();
         _page = index;
         for (int i = 0; i < _mains.Length; i++)
         {
@@ -192,6 +195,7 @@ public sealed partial class MainWindow : Window
         }
         if (_mains[index] == MainNotify) ShowNotifyPreview(true);
         if (_mains[index] == MainStage) ShowStagePreview(true);
+        if (_mains[index] == MainDisplays) RefreshDisplays();
         PageTitle.Text = PageTitles[index];
         ContinuousCorners.Install(_mains[index]);
         HeroBlock.Visibility = index < 3 ? Visibility.Visible : Visibility.Collapsed;
@@ -459,7 +463,7 @@ public sealed partial class MainWindow : Window
         await QueueDownloadAsync(_latestRelease);
     }
 
-    private void OnOpenUpdate(object sender, RoutedEventArgs e) => Nav.SelectedIndex = 8;
+    private void OnOpenUpdate(object sender, RoutedEventArgs e) => Nav.SelectedIndex = 9;
 
     private async void OnCheckForUpdates(object sender, RoutedEventArgs e) => await CheckForUpdatesAsync();
 
@@ -703,8 +707,10 @@ public sealed partial class MainWindow : Window
         StatusSwitch.IsOn = _current.ShowStatus;
         NotificationsSwitch.IsOn = _current.ShowNotifications;
         AutoWidthSwitch.IsOn = _current.AutoWidth;
+        HoverRiseSwitch.IsOn = _current.HoverRise;
         RunningSwitch.IsOn = _current.ShowRunning;
         HideBodySwitch.IsOn = _current.NotifyHideBody;
+        (_current.NotifyPlacement == "topRight" ? NotifyAtTopRight : NotifyAtDock).IsChecked = true;
         ListenerSwitch.IsOn = _current.NotifyListener;
         WeChatSwitch.IsOn = _current.NotifyWeChat;
         FeishuSwitch.IsOn = _current.NotifyFeishu;
@@ -719,7 +725,12 @@ public sealed partial class MainWindow : Window
         (_current.WidgetBackdrop == "wallpaper" ? BackdropWallpaper : BackdropDesktop).IsChecked = true;
         (_current.WidgetMaterial switch { "dusk" => MaterialDusk, "color" => MaterialColor, _ => MaterialGlass }).IsChecked = true;
         HideBannersSwitch.IsOn = _current.HideBanners;
+        WinKeySwitch.IsOn = _current.WinKeyStart;
+        WinNumbersSwitch.IsOn = _current.WinNumbers;
+        (_current.StatusStyle == "icons" ? StatusIcons : StatusRing).IsChecked = true;
+        (_current.AutoHide switch { "never" => HideNever, "always" => HideAlways, _ => HideFullscreen }).IsChecked = true;
         StartupSwitch.IsOn = _current.StartOnLogin;
+        LoadDisplayControls();
         (_current.TextColor switch { "light" => TextLight, "dark" => TextDark, _ => TextAuto }).IsChecked = true;
         UpdateGallery();
         RebuildPins();
@@ -817,6 +828,13 @@ public sealed partial class MainWindow : Window
     {
         if (_loading) return;
         _current.AutoWidth = AutoWidthSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnHoverRiseToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.HoverRise = HoverRiseSwitch.IsOn;
         Changed();
     }
 
@@ -939,6 +957,34 @@ public sealed partial class MainWindow : Window
         Changed();
     }
 
+    private void OnWinKeyToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.WinKeyStart = WinKeySwitch.IsOn;
+        Changed();
+    }
+
+    private void OnWinNumbersToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.WinNumbers = WinNumbersSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnStatusStyleChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.StatusStyle = tag;
+        Changed();
+    }
+
+    private void OnAutoHideChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.AutoHide = tag;
+        Changed();
+    }
+
     private void OnWeChatToggled(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -950,6 +996,14 @@ public sealed partial class MainWindow : Window
     {
         if (_loading || sender is not RadioButton { Tag: string tag }) return;
         _current.TextColor = tag;
+        Changed();
+    }
+
+    private void OnNotifyPlacementChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.NotifyPlacement = (string)((RadioButton)sender).Tag;
+        _notifyEntrancePending = true;
         Changed();
     }
 
@@ -1056,7 +1110,12 @@ public sealed partial class MainWindow : Window
             if (def.Group == group) def.Set(_current, def.Get(d));
         if (group == "clarity") _current.Tint = d.Tint;
         if (group == "width") _current.AutoWidth = d.AutoWidth;
-        if (group == "notify") _current.NotifyHideBody = d.NotifyHideBody;
+        if (group == "size") _current.HoverRise = d.HoverRise;
+        if (group == "notify")
+        {
+            _current.NotifyHideBody = d.NotifyHideBody;
+            _current.NotifyPlacement = d.NotifyPlacement;
+        }
         if (group is "clarity" or "edge" or "light")
             _current.Preset = _current.SameMaterial(BarSettings.Liquid()) ? "liquid" : _current.SameMaterial(BarSettings.Frosted()) ? "frosted" : "custom";
         LoadIntoControls();

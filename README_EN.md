@@ -53,7 +53,7 @@ The glass bends what is behind it, with a touch of highlight and dispersion at t
 
 - A floating capsule of glass at the bottom of the screen. Icons swell like a wave under the pointer; rest for a moment and the app's name appears.
 - Rest on an open app to see a live preview of each of its windows, and switch to or close one from there.
-- Drag pinned apps to reorder them. When the app in front goes full screen or maximised, the bar steps aside.
+- Drag pinned apps to reorder them. When the app in front goes full screen or maximised, the bar steps aside (or keep it up, or always hidden). Optionally, Win + 1…9 open the bar's apps.
 
 ### Start menu
 
@@ -64,7 +64,7 @@ The glass bends what is behind it, with a touch of highlight and dispersion at t
   </tr>
 </table>
 
-Opened from the Windows logo at the left of the bar. The apps pinned in the Windows start menu are here, 7 × 3 a page; just start typing to search, no need to click the search box first. The strip below holds your account, network, volume, battery and power.
+Opened from the Windows logo at the left of the bar, or optionally the Windows key. The apps pinned in the Windows start menu are here; drag them around, drop one onto another to make a folder and name it. Three sizes: small, medium and large. Just start typing to search apps and folders, no need to click the search box first; pinyin initials work too (wx finds 微信). All apps lists them A to Z with a letter index to jump through, and apps you do not want to see can be hidden. The strip below holds your account, network, volume, battery and power.
 
 ### Status ring and control centre
 
@@ -72,7 +72,7 @@ Opened from the Windows logo at the left of the bar. The apps pinned in the Wind
   <img src="docs/images/readme/ring.jpg" alt="The status ring: charging, adjusting the volume, adjusting the brightness" width="100%">
 </p>
 
-Instead of a row of battery, network and volume icons, the right of the bar has a single ring. The outer ring is the battery, with a bolt in its gap while charging; the centre is Wi‑Fi. When you change the volume or brightness, the ring turns into that level and goes back to battery and Wi‑Fi 1.5 seconds later. Scroll over the ring to change the volume.
+Instead of a row of battery, network and volume icons, the right of the bar has a single ring. The outer ring is the battery, with a bolt in its gap while charging; the centre is Wi‑Fi. When you change the volume or brightness, the ring turns into that level and goes back to battery and Wi‑Fi 1.5 seconds later. Scroll over the ring to change the volume. If you prefer the Windows look, switch to network, volume and battery icons side by side.
 
 <table>
   <tr>

@@ -1,6 +1,5 @@
-// Atrium's own notifications: cards above the bell on the bar, each its own
-// piece of the bar's glass. They stack upwards: the newest card sits lowest,
-// on the bar, and older ones peek out above it (the list unfolds upwards).
+// Notifications above the bar by default, or at the primary display's top right.
+// Top-right arrivals push older cards down; the notification centre uses the same position.
 // New notices pop up without taking the focus and time out; the bell opens
 // the list, with a capsule like the bar below the cards for its controls,
 // unread marks, dismiss and clear. Senders are internal
@@ -55,7 +54,7 @@ public:
     void ToggleCenter(bool expand = false);
     bool CenterVisible() const { return center_.surface && center_.surface->Visible(); }
     void Clear();
-    void SetOptions(double timeoutSeconds, bool hideBody);
+    void SetOptions(double timeoutSeconds, bool hideBody, const std::wstring& placement);
     // Corner radius (DIP), the bar's; the cards are concentric with it.
     void SetRadius(float dip);
     int Unread() const;
@@ -72,6 +71,7 @@ private:
         float y = 0, inset = 0, alpha = 0;
         float content = 1; // the card's text (cards behind the stack's front show none)
         bool placed = false;
+        float x = 0; // top-right arrivals slide in from the screen edge
     };
     struct View {
         std::unique_ptr<Surface> surface;
@@ -80,6 +80,7 @@ private:
         bool tracking = false;
         int wheel = 0; // wheel delta not yet turned into steps
         float scroll = 0, scrollTarget = 0, contentH = 0, viewH = 0; // the wheel sets the target; the list glides there
+        float contentTop = 0; // top-right centre: cards start below the control capsule
         std::map<uint64_t, CardAnim> cards;
         std::map<std::wstring, float> glow; // eased hover per element
         double lastPaint = 0;
@@ -87,6 +88,7 @@ private:
         float rippleX = 0, rippleY = 0;
         double rippleMs = 0;
         int regionTop = -1; // window px where the window's region starts (at rest), -1: none
+        int regionBottom = -1; // top-right popups leave the desktop below their cards clickable
         // The stack's place: the card in front, in cards (0 the newest),
         // fractional while it moves. The wheel pushes it (momentum, so a
         // flick goes past several cards), then a spring settles it on a
@@ -132,6 +134,7 @@ private:
     uint64_t nextId_ = 1;
     double timeout_ = 6;
     bool hideBody_ = false;
+    bool topRight_ = false;
     ULONGLONG centerClosed_ = 0;
     float radius_ = 20;
     std::map<uint64_t, double> leaving_; // closing cards: ClockMs() when closed

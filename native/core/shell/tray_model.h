@@ -7,7 +7,11 @@
 // may initialize its lazy overflow. The picture of
 // an icon comes from Windows' record of tray icons (NotifyIconSettings: the
 // program and a snapshot of its icon), matched to the button by name, or from
-// the program's file. UI Automation runs on a worker thread.
+// the program's file; for an icon Windows keeps no record of (Windows 10
+// keeps none), the running program whose name is the button's. Without the
+// new XAML tray (Windows 10), the classic tray's toolbar buttons are read the
+// same way and clicked by mouse messages to the toolbar. UI Automation runs on
+// a worker thread.
 #pragma once
 
 #include "shell/task_model.h"
@@ -28,6 +32,10 @@ struct TrayIcon {
     std::wstring tip;      // the tooltip; may span lines
     std::wstring exe;      // the program it belongs to, when recognised
     std::shared_ptr<const IconImage> image; // null when unknown
+    // A one-shade glyph (white or black, as many tray icons are drawn for the taskbar's theme)
+    // redrawn in the other ink: for bright glass (`inkedOnLight`) or dark. Null for coloured icons.
+    std::shared_ptr<const IconImage> inked;
+    bool inkedOnLight = false;
     bool promoted = false; // on the system taskbar rather than in its overflow
     int index = 0;         // position among the icons of the same place
     std::wstring recordId; // stable Windows identity, also before the overflow UI exists

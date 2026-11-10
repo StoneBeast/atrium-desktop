@@ -47,6 +47,7 @@ struct BarScene {
     std::vector<SceneItem> items;  // apps only (drag and drop works on these)
     std::vector<SceneItem> extras; // Atrium logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
     SystemStatus status;           // drawn by the #status entry
+    bool statusIcons = false;      // as the Windows taskbar's three icons rather than the ring (statusStyle)
     float separatorX = -1;     // < 0: none
     D2D1_RECT_F clock{};       // empty: no clock
     float timePx = 0, datePx = 0;
@@ -55,19 +56,20 @@ struct BarScene {
     std::wstring pressedKey;
     std::wstring dragKey;      // item being dragged: follows the pointer, drawn on top
     // Magnification: icons near the pointer grow up to `magnify` times, over a
-    // wave `magnifyRange` px wide on each side; the bar stretches to fit.
+    // wave `magnifyRange` px wide on each side; the glass stretches and rises with it.
     float magnify = 1;         // 1 = off
     float magnifyRange = 1;
+    float magnifyLift = 0;     // glass rise at full magnification, px
     float pointerX = -1;       // window px; < 0 = the pointer is not on the bar
     // Press ripple in the glass (window px), started at ClockMs() `rippleMs`.
     float rippleX = 0, rippleY = 0;
     double rippleMs = 0;
 };
 
-// What the glass needs from the content each frame: the stretched shape and
-// the ripple.
+// What the glass needs each frame: the stretched shape, local rise and ripple.
 struct BarFrame {
     D2D1_RECT_F shape{};
+    float waveX = 0, waveWidth = 0, waveHeight = 0; // local glass rise under the pointer
     float rippleX = 0, rippleY = 0, rippleR = 0, rippleA = 0;
     float slideY = 0;    // auto-hide: how far the bar is down (px; the content and the glass move together)
 };
@@ -107,6 +109,9 @@ private:
     // wired / offline); while the volume or the brightness changes the ring
     // shows it and a speaker or a sun takes the fan's place (StatusMotion).
     void DrawStatus(ID2D1DeviceContext2* d2d, const SystemStatus& st, D2D1_RECT_F r, ID2D1SolidColorBrush* brush, D2D1_COLOR_F ink, bool darkInk);
+    // The same as the Windows taskbar shows it: the network, the speaker and the battery side by
+    // side in `r` (its height the icons'), redrawn in the bar's ink.
+    void DrawStatusIcons(ID2D1DeviceContext2* d2d, const SystemStatus& st, D2D1_RECT_F r, ID2D1SolidColorBrush* brush, D2D1_COLOR_F ink, bool darkInk);
     float MapX(float u) const; // base x -> displayed x under the magnification
 
     struct Motion {

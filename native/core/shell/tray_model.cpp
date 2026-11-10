@@ -107,6 +107,70 @@ bool DecodePng(const std::vector<BYTE>& bytes, IconImage& out)
     return false; // an empty startup snapshot must fall back to the executable's artwork
 }
 
+// Whether an icon is a glyph in one light (1) or dark (-1) neutral shade, or
+// neither (0): most of its opaque pixels white, or black, without colour. A
+// coloured badge on it (a sync arrow's dot) does not count against it; an icon
+// on a plate of its own (NVIDIA's logo on black) is not a glyph, nor one drawn
+// with both an outline and a fill (OneDrive's), which shows on either glass.
+int GlyphTone(const IconImage& img)
+{
+    size_t opaque = 0, light = 0, dark = 0;
+    for (size_t i = 0; i + 3 < img.bgra.size(); i += 4) {
+        const int a = img.bgra[i + 3];
+        if (a < 64)
+            continue;
+        ++opaque;
+        // Premultiplied: the colour itself is the value over alpha.
+        const int b = img.bgra[i] * 255 / a, g = img.bgra[i + 1] * 255 / a, r = img.bgra[i + 2] * 255 / a;
+        const int chroma = std::max({r, g, b}) - std::min({r, g, b}), lum = (54 * r + 183 * g + 19 * b) >> 8;
+        if (chroma < 40 && lum > 200)
+            ++light;
+        else if (chroma < 40 && lum < 60)
+            ++dark;
+    }
+    if (opaque < 8 || opaque * 4 > img.bgra.size() / 4 * 3)
+        return 0;
+    return light * 10 >= opaque * 6 ? 1 : dark * 10 >= opaque * 6 ? -1 : 0;
+}
+
+// The glyph's neutral pixels (and their soft edges) in Atrium's ink of the
+// other kind (DESIGN.md, ink): #111317 at 92 % for a white glyph, white at 96 %
+// for a black one. Alpha and coloured pixels stay.
+IconImage InkedGlyph(const IconImage& img, int tone)
+{
+    IconImage out = img;
+    const int ink[3] = {tone > 0 ? 0x17 : 255, tone > 0 ? 0x13 : 255, tone > 0 ? 0x11 : 255}; // b, g, r
+    const int strength = tone > 0 ? 235 : 245;
+    for (size_t i = 0; i + 3 < out.bgra.size(); i += 4) {
+        const int a = out.bgra[i + 3];
+        if (!a)
+            continue;
+        const int b = out.bgra[i] * 255 / a, g = out.bgra[i + 1] * 255 / a, r = out.bgra[i + 2] * 255 / a;
+        const int chroma = std::max({r, g, b}) - std::min({r, g, b}), lum = (54 * r + 183 * g + 19 * b) >> 8;
+        if (chroma >= 48 || (tone > 0 ? lum < 128 : lum >= 128))
+            continue;
+        const int na = a * strength / 255;
+        for (int k = 0; k < 3; ++k)
+            out.bgra[i + size_t(k)] = uint8_t(ink[k] * na / 255);
+        out.bgra[i + 3] = uint8_t(na);
+    }
+    return out;
+}
+
+// The ink counterpart of a picture: a one-shade glyph is redrawn in the other ink so it reads
+// on either glass (DESIGN.md, ink); a coloured icon keeps none. Used wherever an image is set,
+// whether it came from the snapshot or from the tray broker.
+void SetInked(TrayIcon& icon)
+{
+    icon.inked = nullptr;
+    icon.inkedOnLight = false;
+    const int tone = icon.image ? GlyphTone(*icon.image) : 0;
+    if (!tone)
+        return;
+    icon.inked = std::make_shared<const IconImage>(InkedGlyph(*icon.image, tone));
+    icon.inkedOnLight = tone > 0;
+}
+
 // Windows' record of the icons that have been in the tray.
 struct Record {
     std::wstring id;      // Windows' record identity; separates multiple icons from one program
@@ -282,6 +346,7 @@ int Score(const std::wstring& tipKey, const std::wstring& candidate)
 
 struct Found {
     winrt::com_ptr<IUIAutomationElement> element;
+    HWND toolbar = nullptr; // a button of the classic tray's toolbar (Windows 10): clicked by messages to it
     std::wstring tip;
     bool promoted;
     int index;
@@ -328,6 +393,46 @@ std::vector<Found> FindButtons(IUIAutomation* uia, bool& available)
     };
     collect(FindWindowW(L"Shell_TrayWnd", nullptr), true);
     collect(FindWindowW(L"TopLevelWindowForOverflowXamlIsland", nullptr), false);
+    if (!out.empty())
+        return out;
+    // No XAML tray (Windows 10, and Windows 11 before its new tray): the classic one, a toolbar of
+    // buttons on the taskbar and another in the overflow window, named by their tooltips too.
+    auto legacy = [&](HWND toolbar, bool promoted) {
+        winrt::com_ptr<IUIAutomationElement> root;
+        if (!toolbar || FAILED(uia->ElementFromHandle(toolbar, root.put())) || !root)
+            return;
+        available = true;
+        VARIANT v;
+        v.vt = VT_I4;
+        v.lVal = UIA_ButtonControlTypeId;
+        winrt::com_ptr<IUIAutomationCondition> cond;
+        winrt::com_ptr<IUIAutomationElementArray> all;
+        if (FAILED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, v, cond.put())) || FAILED(root->FindAll(TreeScope_Children, cond.get(), all.put())) || !all)
+            return;
+        int n = 0;
+        all->get_Length(&n);
+        for (int i = 0; i < n; ++i) {
+            Found f;
+            all->GetElement(i, f.element.put());
+            if (!f.element)
+                continue;
+            BSTR name = nullptr;
+            f.element->get_CurrentName(&name);
+            f.tip = name ? name : L"";
+            SysFreeString(name);
+            f.promoted = promoted;
+            f.index = int(std::count_if(out.begin(), out.end(), [&](const Found& o) { return o.promoted == promoted; }));
+            f.element->get_CurrentBoundingRectangle(&f.bounds);
+            f.toolbar = toolbar;
+            out.push_back(std::move(f));
+        }
+    };
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND notify = tray ? FindWindowExW(tray, nullptr, L"TrayNotifyWnd", nullptr) : nullptr;
+    HWND pager = notify ? FindWindowExW(notify, nullptr, L"SysPager", nullptr) : nullptr;
+    legacy(pager ? FindWindowExW(pager, nullptr, L"ToolbarWindow32", nullptr) : nullptr, true);
+    HWND overflow = FindWindowW(L"NotifyIconOverflowWindow", nullptr);
+    legacy(overflow ? FindWindowExW(overflow, nullptr, L"ToolbarWindow32", nullptr) : nullptr, false);
     return out;
 }
 
@@ -516,7 +621,10 @@ std::vector<int> MatchButtons(std::vector<Found>& buttons, std::vector<Record>& 
     for (const auto& app : apps)
         if (!app.path.empty() && !app.name.empty()) labels[Lower(AppExecutable(app.path))].push_back(app.name);
     std::vector<Candidate> candidates;
-    std::map<std::wstring, std::pair<std::wstring, std::wstring>> version;
+    // A program's description and product name, read from its file once (the worker thread's).
+    static std::map<std::wstring, std::pair<std::wstring, std::wstring>> version;
+    if (version.size() > 512)
+        version.clear();
     for (size_t r = 0; r < records.size(); ++r) {
         auto run = running.find(records[r].exe);
         if (run == running.end()) run = running.find(L"|" + Lower(PathFindFileNameW(records[r].exe.c_str())));
@@ -524,8 +632,9 @@ std::vector<int> MatchButtons(std::vector<Found>& buttons, std::vector<Record>& 
         RECT bounds{};
         bool live = LiveIcon(records[r], run->second, bounds);
         if ((records[r].hasUid || records[r].guid != GUID_NULL) && !live) continue;
-        auto& v = version[records[r].exe];
-        if (v.first.empty() && v.second.empty())
+        auto [at, fresh] = version.try_emplace(records[r].exe);
+        auto& v = at->second;
+        if (fresh)
             v = {VersionString(records[r].exe, L"FileDescription"), VersionString(records[r].exe, L"ProductName")};
         std::wstring stem = PathFindFileNameW(records[r].exe.c_str());
         PathRemoveExtensionW(stem.data());
@@ -537,20 +646,85 @@ std::vector<int> MatchButtons(std::vector<Found>& buttons, std::vector<Record>& 
         c.names.insert(c.names.end(), run->second.titles.begin(), run->second.titles.end());
         candidates.push_back(std::move(c));
     }
+    // Explorer's overflow buttons are there once it has been opened: then every icon it shows is.
+    const bool overflowRead = std::any_of(buttons.begin(), buttons.end(), [](const Found& f) { return !f.promoted && f.element; });
     auto match = MatchRecords(buttons, records, candidates, ordered);
+    // Programs Windows keeps no record for (Windows 10 keeps none of these): a running program
+    // whose description, product or file name is the name of a button left unmatched still owns
+    // it, its picture then the program's own. After the records, and only on a clear name.
+    if (std::any_of(match.begin(), match.end(), [](int m) { return m < 0; })) {
+        std::set<std::wstring> taken;
+        for (const Record& r : records)
+            taken.insert(r.exe);
+        for (size_t b = 0; b < buttons.size(); ++b) {
+            const std::wstring key = Key(TrayModel::Title(buttons[b].tip));
+            if (match[b] >= 0 || key.empty())
+                continue;
+            int best = 79;
+            std::wstring owner;
+            for (const auto& [path, program] : running) {
+                if (path.empty() || path[0] == L'|' || taken.contains(path) || program.windows.empty())
+                    continue;
+                auto [at, fresh] = version.try_emplace(path);
+                auto& v = at->second;
+                if (fresh)
+                    v = {VersionString(path, L"FileDescription"), VersionString(path, L"ProductName")};
+                std::wstring stem = PathFindFileNameW(path.c_str());
+                PathRemoveExtensionW(stem.data());
+                stem.resize(wcslen(stem.c_str()));
+                int sc = std::max({Score(key, v.first), Score(key, v.second), Score(key, stem)});
+                for (const std::wstring& title : program.titles)
+                    if (Score(key, title) == 100)
+                        sc = std::max(sc, 100); // a window's title only when it is the name
+                if (sc > best)
+                    best = sc, owner = path;
+            }
+            if (owner.empty())
+                continue;
+            Record r;
+            r.id = L"run:" + owner;
+            r.exe = owner;
+            records.push_back(std::move(r));
+            match[b] = int(records.size() - 1);
+            taken.insert(owner);
+        }
+    }
     std::set<int> used(match.begin(), match.end());
+    // What is shown already, so a second record of the same icon does not add it again: its program,
+    // its name and its place.
+    std::set<std::wstring> shownExe, shownName;
+    std::vector<RECT> shownAt;
+    for (size_t b = 0; b < buttons.size(); ++b) {
+        if (match[b] >= 0)
+            shownExe.insert(records[size_t(match[b])].exe);
+        if (std::wstring name = Key(TrayModel::Title(buttons[b].tip)); !name.empty())
+            shownName.insert(name);
+        shownAt.push_back(buttons[b].bounds);
+    }
     std::stable_sort(candidates.begin(), candidates.end(), [&](const Candidate& a, const Candidate& b) {
         return records[a.record].order < records[b.record].order;
     });
     // Explorer creates the overflow's UI Automation buttons only after its
     // first opening. Live shell identities exist before then; persisted records
     // alone must never resurrect icons from applications that have exited.
+    // A live record whose icon none of Explorer's buttons shows is an icon its app keeps hidden, or
+    // an old record of an icon that is shown (a program that registered it twice, its snapshot a
+    // greyed-out state): those are left out.
     for (const auto& c : candidates) {
-        if (!c.live || used.contains(int(c.record))) continue;
+        if (!c.live || used.contains(int(c.record)) || overflowRead) continue;
         const auto& r = records[c.record];
         Found f;
         f.tip = r.tip.empty() ? c.names[1] : r.tip;
         if (f.tip.empty()) f.tip = c.names[3];
+        const POINT center{(c.bounds.left + c.bounds.right) / 2, (c.bounds.top + c.bounds.bottom) / 2};
+        if (shownExe.contains(r.exe) || shownName.contains(Key(TrayModel::Title(f.tip))) ||
+            std::any_of(shownAt.begin(), shownAt.end(), [&](const RECT& at) { return !IsRectEmpty(&at) && PtInRect(&at, center); })) {
+            Log(L"tray: left out a second record of '%s' (%s)", TrayModel::Title(f.tip).c_str(), PathFindFileNameW(r.exe.c_str()));
+            continue;
+        }
+        shownExe.insert(r.exe);
+        shownName.insert(Key(TrayModel::Title(f.tip)));
+        shownAt.push_back(c.bounds);
         f.promoted = r.promoted;
         f.index = int(std::count_if(buttons.begin(), buttons.end(), [&](const Found& b) { return b.promoted == f.promoted; }));
         f.bounds = c.bounds;
@@ -623,6 +797,7 @@ bool TrayModel::LiveRefresh()
         if (!live || live == icon.image)
             continue;
         icon.image = std::move(live);
+        SetInked(icon); // the new picture may be a glyph in the other ink
         changed = true;
     }
     return changed;
@@ -692,7 +867,8 @@ void TrayModel::Worker()
     struct Picture {
         std::wstring exe;
         std::vector<BYTE> snapshot;
-        std::shared_ptr<const IconImage> image;
+        std::shared_ptr<const IconImage> image, inked;
+        bool inkedOnLight = false;
     };
     std::map<std::wstring, Picture> pictures;
     for (;;) {
@@ -709,7 +885,9 @@ void TrayModel::Worker()
             continue;
         try {
             bool available = false;
+            const ULONGLONG findStart = GetTickCount64();
             std::vector<Found> buttons = FindButtons(uia.get(), available);
+            const ULONGLONG readMs = GetTickCount64() - findStart;
             auto appNames = appNames_ ? appNames_() : std::vector<PinnedApp>{};
             if (!job.refresh) {
                 // Resolve stable identity first; names and positions can change
@@ -752,7 +930,17 @@ void TrayModel::Worker()
                     it = find();
                 }
                 HRESULT hr = E_FAIL;
-                if (it != buttons.end() && it->element) {
+                RECT at = it != buttons.end() ? it->bounds : RECT{};
+                if (it != buttons.end() && it->toolbar && !IsRectEmpty(&at)) {
+                    // The classic toolbar: a click of the mouse on the button, as messages to it.
+                    // Explorer tells the app where the pointer is (its menu opens there).
+                    POINT p{(at.left + at.right) / 2, (at.top + at.bottom) / 2};
+                    ScreenToClient(it->toolbar, &p);
+                    const LPARAM pos = MAKELPARAM(p.x, p.y);
+                    PostMessageW(it->toolbar, WM_MOUSEMOVE, 0, pos);
+                    PostMessageW(it->toolbar, job.right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN, job.right ? MK_RBUTTON : MK_LBUTTON, pos);
+                    hr = PostMessageW(it->toolbar, job.right ? WM_RBUTTONUP : WM_LBUTTONUP, 0, pos) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+                } else if (it != buttons.end() && it->element) {
                     if (job.right) {
                         winrt::com_ptr<IUIAutomationElement3> e3 = it->element.try_as<IUIAutomationElement3>();
                         hr = e3 ? e3->ShowContextMenu() : E_NOINTERFACE;
@@ -771,6 +959,7 @@ void TrayModel::Worker()
 
             bool ordered = false;
             std::vector<Record> records;
+            const ULONGLONG readStart = GetTickCount64() - readMs; // FindButtons included
             std::vector<int> match = MatchButtons(buttons, records, ordered, appNames);
 
             std::vector<TrayIcon> icons;
@@ -796,6 +985,7 @@ void TrayModel::Worker()
                     // Windows first saw the program.
                     if (auto live = Broker().Image(r.exe, t.uid, t.hasGuid ? &t.guid : nullptr)) {
                         t.image = std::move(live);
+                        SetInked(t);
                         Log(L"tray: live icon from the broker for '%s' (uid %u)", PathFindFileNameW(r.exe.c_str()), t.uid);
                     } else {
                         auto& pic = pictures[key];
@@ -805,9 +995,16 @@ void TrayModel::Worker()
                                 img = {};
                             pic.exe = r.exe;
                             pic.snapshot = r.png;
+                            const int tone = img.empty() ? 0 : GlyphTone(img);
+                            pic.inked = tone ? std::make_shared<const IconImage>(InkedGlyph(img, tone)) : nullptr;
+                            if (tone)
+                                Log(L"tray: %s draws a %s glyph: it follows the ink", PathFindFileNameW(r.exe.c_str()), tone > 0 ? L"white" : L"black");
+                            pic.inkedOnLight = tone > 0;
                             pic.image = img.empty() ? nullptr : std::make_shared<const IconImage>(std::move(img));
                         }
                         t.image = pic.image;
+                        t.inked = pic.inked;
+                        t.inkedOnLight = pic.inkedOnLight;
                     }
                 }
                 icons.push_back(std::move(t));
@@ -825,8 +1022,9 @@ void TrayModel::Worker()
                 available_ = available;
             }
             if (changed) {
-                Log(L"tray: %zu icons (%d recognised %s)%s", buttons.size(), recognised, ordered ? L"in Windows' order" : L"by name",
-                    available ? L"" : L", the shell's tray was not found");
+                Log(L"tray: %zu icons (%d recognised %s%s) in %llu ms%s", buttons.size(), recognised, ordered ? L"in Windows' order" : L"by name",
+                    std::any_of(buttons.begin(), buttons.end(), [](const Found& f) { return f.toolbar != nullptr; }) ? L", classic tray" : L"",
+                    GetTickCount64() - readStart, available ? L"" : L", the shell's tray was not found");
                 for (size_t b = 0; b < buttons.size(); ++b) {
                     std::wstring exe = match[b] >= 0 ? std::wstring(PathFindFileNameW(records[size_t(match[b])].exe.c_str())) : L"-";
                     Log(L"tray:   %zu '%s' -> %s", b, Title(buttons[b].tip).substr(0, 24).c_str(), exe.c_str());

@@ -482,7 +482,7 @@ bool GlassRenderer::Present(const std::vector<GlassParams>& shapes, const std::f
         }
         // The shader runs only over the shape's bounds and its shadow (a tall
         // popup with a few cards would otherwise shade every pixel per card).
-        float l = p.shapeL, t = p.shapeT, r = p.shapeR, b = p.shapeB;
+        float l = p.shapeL, t = p.shapeT - p.waveHeight, r = p.shapeR, b = p.shapeB;
         if (p.tailHeight > 0)
             b += p.tailHeight;
         for (int i = 0; i < int(p.partCount) && i < kMaxGlassParts; ++i) {
