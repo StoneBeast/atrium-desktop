@@ -1541,6 +1541,17 @@ bool LoadAtriumIcon(const std::wstring& exePath, int sizePx, IconImage& out)
     return ok;
 }
 
+bool CopyIconImage(HICON icon, int sizePx, IconImage& out)
+{
+    if (!icon)
+        return false;
+    IconImage raw;
+    if (!IconToImage(icon, raw))
+        return false;
+    out = sizePx > 0 ? FitToSquare(raw, sizePx) : std::move(raw);
+    return true;
+}
+
 bool LoadShellImage(const std::wstring& parsingName, int sizePx, IconImage& out, bool thumbnail)
 {
     try {

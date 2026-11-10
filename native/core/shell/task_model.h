@@ -55,6 +55,10 @@ bool LoadShellImage(const std::wstring& parsingName, int sizePx, IconImage& out,
 // itself, not from the shell's icon cache or Explorer's tray snapshot, which keep the icon an
 // earlier build had at the same path. False for any other program.
 bool LoadAtriumIcon(const std::wstring& exePath, int sizePx, IconImage& out);
+// A Win32 icon handle copied to premultiplied BGRA. The handle may belong to another
+// process: the tray broker receives those with every Shell_NotifyIcon message. sizePx 0
+// keeps the icon's own size; otherwise it is fitted into that square.
+bool CopyIconImage(HICON icon, int sizePx, IconImage& out);
 // Resolves a shortcut and a versioned client's app/ launcher without starting it.
 std::wstring AppExecutable(const std::wstring& path);
 

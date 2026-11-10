@@ -1,6 +1,7 @@
 #include "shell/tray_model.h"
 
 #include "log.h"
+#include "shell/tray_broker.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -154,6 +155,20 @@ IconImage InkedGlyph(const IconImage& img, int tone)
         out.bgra[i + 3] = uint8_t(na);
     }
     return out;
+}
+
+// The ink counterpart of a picture: a one-shade glyph is redrawn in the other ink so it reads
+// on either glass (DESIGN.md, ink); a coloured icon keeps none. Used wherever an image is set,
+// whether it came from the snapshot or from the tray broker.
+void SetInked(TrayIcon& icon)
+{
+    icon.inked = nullptr;
+    icon.inkedOnLight = false;
+    const int tone = icon.image ? GlyphTone(*icon.image) : 0;
+    if (!tone)
+        return;
+    icon.inked = std::make_shared<const IconImage>(InkedGlyph(*icon.image, tone));
+    icon.inkedOnLight = tone > 0;
 }
 
 // Windows' record of the icons that have been in the tray.
@@ -762,9 +777,30 @@ void TrayModel::Refresh()
 
 void TrayModel::Click(const TrayIcon& icon, bool right)
 {
+    // The broker knows the icon's own callback message: that is exactly what
+    // Explorer sends, no UI Automation and no opening the overflow window.
+    if (Broker().Click(icon.exe, icon.uid, icon.hasGuid ? &icon.guid : nullptr, right))
+        return;
     std::lock_guard g(mutex_);
     jobs_.push_back({false, icon, right});
     cv_.notify_all();
+}
+
+bool TrayModel::LiveRefresh()
+{
+    bool changed = false;
+    std::lock_guard g(mutex_);
+    for (TrayIcon& icon : icons_) {
+        if (icon.exe.empty())
+            continue;
+        auto live = Broker().Image(icon.exe, icon.uid, icon.hasGuid ? &icon.guid : nullptr);
+        if (!live || live == icon.image)
+            continue;
+        icon.image = std::move(live);
+        SetInked(icon); // the new picture may be a glyph in the other ink
+        changed = true;
+    }
+    return changed;
 }
 
 bool TrayModel::OpenExisting(const std::wstring& exe)
@@ -938,26 +974,37 @@ void TrayModel::Worker()
                 if (match[b] >= 0) {
                     const Record& r = records[size_t(match[b])];
                     t.exe = r.exe;
+                    t.uid = r.hasUid ? r.uid : 0;
+                    t.hasGuid = r.guid != GUID_NULL;
+                    if (t.hasGuid) t.guid = r.guid;
                     ++recognised;
                     const std::wstring& key = r.id;
                     livePictures.insert(key);
-                    auto& pic = pictures[key];
-                    if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
-                        IconImage img;
-                        if (!LoadAtriumIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
-                            img = {};
-                        pic.exe = r.exe;
-                        pic.snapshot = r.png;
-                        const int tone = img.empty() ? 0 : GlyphTone(img);
-                        pic.inked = tone ? std::make_shared<const IconImage>(InkedGlyph(img, tone)) : nullptr;
-                        if (tone)
-                            Log(L"tray: %s draws a %s glyph: it follows the ink", PathFindFileNameW(r.exe.c_str()), tone > 0 ? L"white" : L"black");
-                        pic.inkedOnLight = tone > 0;
-                        pic.image = img.empty() ? nullptr : std::make_shared<const IconImage>(std::move(img));
+                    // The broker's icon is what the program shows now (a blink sends a new
+                    // one with every message); the stored snapshot is the icon of the moment
+                    // Windows first saw the program.
+                    if (auto live = Broker().Image(r.exe, t.uid, t.hasGuid ? &t.guid : nullptr)) {
+                        t.image = std::move(live);
+                        SetInked(t);
+                    } else {
+                        auto& pic = pictures[key];
+                        if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
+                            IconImage img;
+                            if (!LoadAtriumIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
+                                img = {};
+                            pic.exe = r.exe;
+                            pic.snapshot = r.png;
+                            const int tone = img.empty() ? 0 : GlyphTone(img);
+                            pic.inked = tone ? std::make_shared<const IconImage>(InkedGlyph(img, tone)) : nullptr;
+                            if (tone)
+                                Log(L"tray: %s draws a %s glyph: it follows the ink", PathFindFileNameW(r.exe.c_str()), tone > 0 ? L"white" : L"black");
+                            pic.inkedOnLight = tone > 0;
+                            pic.image = img.empty() ? nullptr : std::make_shared<const IconImage>(std::move(img));
+                        }
+                        t.image = pic.image;
+                        t.inked = pic.inked;
+                        t.inkedOnLight = pic.inkedOnLight;
                     }
-                    t.image = pic.image;
-                    t.inked = pic.inked;
-                    t.inkedOnLight = pic.inkedOnLight;
                 }
                 icons.push_back(std::move(t));
             }
