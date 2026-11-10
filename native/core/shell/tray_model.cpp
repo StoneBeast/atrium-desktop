@@ -986,6 +986,7 @@ void TrayModel::Worker()
                     if (auto live = Broker().Image(r.exe, t.uid, t.hasGuid ? &t.guid : nullptr)) {
                         t.image = std::move(live);
                         SetInked(t);
+                        Log(L"tray: live icon from the broker for '%s' (uid %u)", PathFindFileNameW(r.exe.c_str()), t.uid);
                     } else {
                         auto& pic = pictures[key];
                         if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
