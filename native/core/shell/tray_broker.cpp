@@ -20,6 +20,9 @@ constexpr wchar_t kNotifyClass[] = L"TrayNotifyWnd";
 constexpr DWORD kSignature = 0x34753423; // TRAYNOTIFYDATAW's first field
 constexpr UINT_PTR kRaiseTimer = 0x7A01;
 constexpr UINT_PTR kNotifyTimer = 0x7A02;
+constexpr UINT_PTR kSeedTimer = 0x7A03;
+constexpr UINT kSeedMs = 1200;  // programs answer TaskbarCreated at their own pace
+constexpr int kSeeds = 2;
 constexpr UINT kRaiseMs = 250;   // Explorer raises its own tray now and then
 constexpr UINT kNotifyMs = 40;   // live updates reach the panel in bursts
 constexpr UINT kForwardTimeoutMs = 2000;
@@ -125,6 +128,7 @@ struct TrayBroker::Impl {
     HWND notify = nullptr;
     UINT notifyMessage = 0;
     UINT_PTR notifyTimer = 0;
+    int seeds = 0;
     HINSTANCE instance = nullptr;
     RECT geometry{};
     bool haveGeometry = false;
@@ -289,6 +293,10 @@ struct TrayBroker::Impl {
             entry->window = owner;
             entry->uid = nid.uID;
             entry->exe = ProcessPath(owner);
+            const wchar_t* name = entry->exe.c_str();
+            if (const wchar_t* slash = wcsrchr(name, L'\\'))
+                name = slash + 1;
+            Log(L"broker: icon %s uid=%u%s", *name ? name : L"?", entry->uid, entry->hasGuid ? L" (guid)" : L"");
         }
         if (hasGuid) {
             entry->hasGuid = true;
@@ -311,6 +319,20 @@ struct TrayBroker::Impl {
         if (message == kSetVersion || (nid.uVersion >= 3 && nid.uVersion <= 4))
             entry->version = nid.uVersion;
         NotifyChanged();
+    }
+
+    // Asks every program to register its icon again; they answer over the next
+    // moments, so this is repeated a couple of times while we are on top.
+    void BroadcastCreated()
+    {
+        if (UINT created = RegisterWindowMessageW(L"TaskbarCreated"))
+            SendNotifyMessageW(HWND_BROADCAST, created, 0, 0);
+    }
+
+    size_t Count()
+    {
+        std::lock_guard g(mutex);
+        return icons.size();
     }
 
     void NotifyChanged()
@@ -361,6 +383,15 @@ struct TrayBroker::Impl {
                 notifyTimer = 0;
                 if (notify)
                     PostMessageW(notify, notifyMessage, 0, 0);
+                return 0;
+            }
+            if (wparam == kSeedTimer) {
+                RequireTop();
+                BroadcastCreated();
+                if (++seeds >= kSeeds) {
+                    KillTimer(window, kSeedTimer);
+                    Log(L"broker: %zu icons after seeding", Count());
+                }
                 return 0;
             }
             return 0;
@@ -450,9 +481,11 @@ bool TrayBroker::Start(HWND notify, UINT message)
     SetTimer(impl_->window, kRaiseTimer, kRaiseMs, nullptr);
     // Programs register their icons when the taskbar is (re)created; the same
     // message makes them register with us, so icons that existed before Atrium
-    // started are live from the first paint.
-    if (UINT created = RegisterWindowMessageW(L"TaskbarCreated"))
-        SendNotifyMessageW(HWND_BROADCAST, created, 0, 0);
+    // started are live from the first paint. They answer asynchronously and
+    // Explorer may take the top spot meanwhile, so it is sent again by a timer.
+    impl_->BroadcastCreated();
+    SetTimer(impl_->window, kSeedTimer, kSeedMs, nullptr);
+    impl_->seeds = 1;
     Log(L"broker: tray window 0x%p above Explorer's, forwarding to 0x%p",
         static_cast<void*>(impl_->window), static_cast<void*>(impl_->FindTarget()));
     return true;
