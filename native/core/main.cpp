@@ -16,6 +16,7 @@
 #include "shell/system_chrome.h"
 #include "shell/system_status.h"
 #include "shell/tray_model.h"
+#include "shell/tray_broker.h"
 #include "shell/win_key.h"
 #include "shell/feishu_source.h"
 #include "shell/wechat_source.h"
@@ -985,8 +986,12 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_TRAY_ICONS:
         if (w == 1) // a click was forwarded: see where the focus ends up
             SetTimer(h, kTrayFocusTimer, 600, nullptr);
-        else if (g_app.trayPanel)
-            g_app.trayPanel->Refresh();
+        else {
+            if (g_app.tray)
+                g_app.tray->LiveRefresh(); // the broker has newer icons than the snapshot
+            if (g_app.trayPanel)
+                g_app.trayPanel->Refresh();
+        }
         return 0;
     case WM_TIMER:
         if (w == kReadyTimer) {
@@ -1285,6 +1290,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
             s.pins = std::move(pins);
         });
     };
+    // The tray broker takes the notification-icon messages on their way to Explorer and
+    // forwards every one of them, so the system tray behaves as before while Atrium sees
+    // the live icons (and clicks with the program's own callback message).
+    Broker().Start(g_app.host, WM_TRAY_ICONS);
     AddTrayIcon();
     UpdateStatus();
     g_app.brightnessNotify = RegisterPowerSettingNotification(g_app.host, &kBrightnessSetting, DEVICE_NOTIFY_WINDOW_HANDLE);
@@ -1299,6 +1308,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         DispatchMessageW(&msg);
     }
     g_app.displaysReady = false;
+    Broker().Stop(); // its window belongs to this thread; Explorer gets the icons back
     // First the render thread, while every window it draws for is still there; a driver call stuck
     // in the desktop duplication (it holds the shared device) must not keep Atrium from exiting:
     // the system taskbar comes back and the process ends.
