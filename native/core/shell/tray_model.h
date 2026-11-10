@@ -31,6 +31,9 @@ struct TrayIcon {
     bool promoted = false; // on the system taskbar rather than in its overflow
     int index = 0;         // position among the icons of the same place
     std::wstring recordId; // stable Windows identity, also before the overflow UI exists
+    unsigned uid = 0;      // the program's own id for the icon (NOTIFYICONDATA.uID)
+    bool hasGuid = false;  // the icon's stable id, when the program registers one
+    GUID guid{};
 };
 
 class TrayModel {
@@ -43,6 +46,10 @@ public:
     TrayModel& operator=(const TrayModel&) = delete;
 
     void Refresh(); // asynchronous
+    // Swaps in the live icons the tray broker has received since the last read
+    // (a blink delivers a new icon every few hundred milliseconds). Cheap: one
+    // lookup per icon, no UI Automation.
+    bool LiveRefresh();
     std::vector<TrayIcon> Icons() const;
     bool Loaded() const;
     bool Available() const; // the shell's tray was found in the last read

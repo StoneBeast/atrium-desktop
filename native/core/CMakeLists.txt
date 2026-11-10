@@ -42,6 +42,7 @@ add_executable(atrium_core WIN32
     shell/audio_devices.cpp
     shell/projection.cpp
     shell/tray_model.cpp
+    shell/tray_broker.cpp
     shell/wechat_source.cpp
     shell/feishu_source.cpp
     ui/surface.cpp

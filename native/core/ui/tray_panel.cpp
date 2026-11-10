@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace atrium {
 
@@ -23,6 +24,21 @@ constexpr float kSplit = 14, kFooterH = 24;                            // icons 
 constexpr double kStageMs = 240, kStaggerMs = 14, kRippleMs = 520;
 
 D2D1_COLOR_F Alpha(D2D1_COLOR_F c, float a) { return D2D1::ColorF(c.r, c.g, c.b, c.a * a); }
+
+// FNV-1a over the pixels: a blinking icon delivers a new image every few hundred
+// milliseconds, and a bitmap per image pointer would never be freed. The same
+// pixels keep one bitmap.
+uint64_t ImageHash(const IconImage& image)
+{
+    uint64_t hash = 1469598103934665603ull;
+    for (uint8_t byte : image.bgra) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    }
+    hash ^= uint64_t(unsigned(image.width)) * 0x9E3779B97F4A7C15ull;
+    hash ^= uint64_t(unsigned(image.height)) * 0xC2B2AE3D27D4EB4Full;
+    return hash;
+}
 bool In(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
 } // namespace
 
@@ -96,8 +112,13 @@ void TrayPanel::Refresh()
 {
     if (!surface_.Visible())
         return;
+    const D2D1_SIZE_F before = Size();
     icons_ = model_.Icons();
-    Place();
+    // A live icon update (a blink) only changes the picture; moving the panel
+    // again for it would make the window flicker. The grid's size changes when
+    // the icons themselves do.
+    if (Size().width != before.width || Size().height != before.height)
+        Place();
     surface_.Invalidate();
 }
 
@@ -149,7 +170,7 @@ void TrayPanel::Paint(Canvas& c)
         c.BeginGroup(1, pressed_ == id ? 0.9f : 1 + 0.1f * hv, cx, cy);
         if (icon.image) {
             wchar_t key[64];
-            swprintf_s(key, L"tray|%p|%d", static_cast<const void*>(icon.image.get()), iconPx);
+            swprintf_s(key, L"tray|%016llX|%d", static_cast<unsigned long long>(ImageHash(*icon.image)), iconPx);
             c.Image(key, *icon.image, ir);
         } else {
             // Not recognised: its initial on a quiet disc.

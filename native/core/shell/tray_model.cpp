@@ -1,6 +1,7 @@
 #include "shell/tray_model.h"
 
 #include "log.h"
+#include "shell/tray_broker.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -602,9 +603,29 @@ void TrayModel::Refresh()
 
 void TrayModel::Click(const TrayIcon& icon, bool right)
 {
+    // The broker knows the icon's own callback message: that is exactly what
+    // Explorer sends, no UI Automation and no opening the overflow window.
+    if (Broker().Click(icon.exe, icon.uid, icon.hasGuid ? &icon.guid : nullptr, right))
+        return;
     std::lock_guard g(mutex_);
     jobs_.push_back({false, icon, right});
     cv_.notify_all();
+}
+
+bool TrayModel::LiveRefresh()
+{
+    bool changed = false;
+    std::lock_guard g(mutex_);
+    for (TrayIcon& icon : icons_) {
+        if (icon.exe.empty())
+            continue;
+        auto live = Broker().Image(icon.exe, icon.uid, icon.hasGuid ? &icon.guid : nullptr);
+        if (!live || live == icon.image)
+            continue;
+        icon.image = std::move(live);
+        changed = true;
+    }
+    return changed;
 }
 
 bool TrayModel::OpenExisting(const std::wstring& exe)
@@ -764,19 +785,29 @@ void TrayModel::Worker()
                 if (match[b] >= 0) {
                     const Record& r = records[size_t(match[b])];
                     t.exe = r.exe;
+                    t.uid = r.hasUid ? r.uid : 0;
+                    t.hasGuid = r.guid != GUID_NULL;
+                    if (t.hasGuid) t.guid = r.guid;
                     ++recognised;
                     const std::wstring& key = r.id;
                     livePictures.insert(key);
-                    auto& pic = pictures[key];
-                    if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
-                        IconImage img;
-                        if (!LoadAtriumIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
-                            img = {};
-                        pic.exe = r.exe;
-                        pic.snapshot = r.png;
-                        pic.image = img.empty() ? nullptr : std::make_shared<const IconImage>(std::move(img));
+                    // The broker's icon is what the program shows now (a blink sends a new
+                    // one with every message); the stored snapshot is the icon of the moment
+                    // Windows first saw the program.
+                    if (auto live = Broker().Image(r.exe, t.uid, t.hasGuid ? &t.guid : nullptr)) {
+                        t.image = std::move(live);
+                    } else {
+                        auto& pic = pictures[key];
+                        if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
+                            IconImage img;
+                            if (!LoadAtriumIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
+                                img = {};
+                            pic.exe = r.exe;
+                            pic.snapshot = r.png;
+                            pic.image = img.empty() ? nullptr : std::make_shared<const IconImage>(std::move(img));
+                        }
+                        t.image = pic.image;
                     }
-                    t.image = pic.image;
                 }
                 icons.push_back(std::move(t));
             }
