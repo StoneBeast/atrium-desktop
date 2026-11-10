@@ -2,9 +2,8 @@ name: build
 
 on:
   push:
-    branches: [main, tray-broker]
+    branches: [main]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
