@@ -68,8 +68,9 @@ try {
         Remove-Item -LiteralPath $appKey -Recurse -Force
     }
     # Leave any files the user added to the application folder.
+    # An app some process started there may still be in it: the empty folder then stays.
     if (!(Get-ChildItem -LiteralPath $installRoot -Force | Select-Object -First 1)) {
-        Remove-Item -LiteralPath $installRoot
+        try { Remove-Item -LiteralPath $installRoot } catch { }
     }
 }
 catch {

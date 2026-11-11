@@ -26,6 +26,7 @@ bool SharedHost(const std::wstring& path)
 
 struct Process {
     Handle handle{nullptr, CloseHandle};
+    std::wstring path;
     DWORD pid, parent;
     ULONGLONG created;
     bool selected;
@@ -87,9 +88,19 @@ bool TerminateAppProcesses(std::span<const AppProcessIdentity> apps)
         if (!GetProcessTimes(process.get(), &created, &exited, &kernel, &user))
             continue;
         const bool selected = Matches(process.get(), path, apps);
-        processes.push_back({std::move(process), entry.th32ProcessID, entry.th32ParentProcessID,
+        processes.push_back({std::move(process), path, entry.th32ProcessID, entry.th32ParentProcessID,
             (ULONGLONG(created.dwHighDateTime) << 32) | created.dwLowDateTime, selected});
     } while (Process32NextW(snapshot.get(), &entry));
+    // The app's folders: its helpers are the processes it started from them.
+    std::vector<std::wstring> folders;
+    for (const auto& process : processes)
+        if (process.selected)
+            folders.push_back(process.path.substr(0, process.path.find_last_of(L"\\/") + 1));
+    auto inside = [&](const std::wstring& path) {
+        return std::any_of(folders.begin(), folders.end(), [&](const std::wstring& folder) {
+            return !folder.empty() && path.size() > folder.size() && _wcsnicmp(path.c_str(), folder.c_str(), folder.size()) == 0;
+        });
+    };
     // Select helpers before ending parents; creation times reject reused parent PIDs.
     bool changed;
     do {
@@ -98,7 +109,7 @@ bool TerminateAppProcesses(std::span<const AppProcessIdentity> apps)
             if (child.selected)
                 continue;
             for (const auto& parent : processes)
-                if (parent.selected && child.parent == parent.pid && child.created >= parent.created) {
+                if (parent.selected && child.parent == parent.pid && child.created >= parent.created && inside(child.path)) {
                     child.selected = changed = true;
                     break;
                 }

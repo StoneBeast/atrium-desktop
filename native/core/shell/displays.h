@@ -24,6 +24,10 @@ HMONITOR ResolveDisplay(const std::vector<DisplayInfo>& displays, const std::wst
 std::optional<bool> WindowCoverOnMonitor(HMONITOR windowMonitor, const RECT& frame, bool maximized,
     HMONITOR monitor, const RECT& bounds);
 bool AtDisplayBottom(POINT pointer, const RECT& bounds); // bottom edge, strictly inside this display
+// The app in front on `monitor` fills the whole screen (a game, a video, F11), not just its work
+// area, or a game holds the screen exclusively: as with Windows' taskbar, the pointer at the
+// screen's edges brings nothing up over it (a full-screen game losing the top drops to the desktop).
+bool FullScreenInFront(HMONITOR monitor);
 bool FilterTasksOnDisplay(const std::wstring& mode, bool primary);
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,
     HMONITOR monitor, HWND foreground, const std::function<HMONITOR(HWND)>& monitorOf);

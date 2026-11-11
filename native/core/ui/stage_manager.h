@@ -28,6 +28,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace atrium {
@@ -35,7 +36,7 @@ namespace atrium {
 class StageManager {
 public:
     StageManager(HINSTANCE instance, TaskModel& tasks);
-    ~StageManager() = default;
+    ~StageManager();
     StageManager(const StageManager&) = delete;
     StageManager& operator=(const StageManager&) = delete;
 
@@ -43,6 +44,11 @@ public:
     bool Enabled() const { return enabled_; }
     void SetOnRight(bool onRight);
     void SetAutoHide(bool autoHide);
+    // A window minimized on the stage goes to the strip with its app (setting stageMinimize): once
+    // all of an app's windows on the stage are down, the app waits there as a set of its own.
+    void SetMinimizeToStrip(bool on);
+    // EVENT_SYSTEM_MINIMIZESTART (its hook while the option is on): at once, not when the task model next reports.
+    void Minimized(HWND window);
     void SetMonitor(HMONITOR monitor, bool refresh = false);
     // The task model changed (every group, also those the bar does not show).
     void Update(const std::vector<TaskItem>& items);
@@ -100,6 +106,9 @@ private:
     void PutDown(HWND window, bool fly); // minimizes a window put away, once; its picture flies to the strip
     Set SetOf(const std::wstring& key) const; // the set in the strip `key` belongs to, or just it
     void Prune();
+    void ReleaseUp();          // the stage's windows get their own minimize animation back
+    bool AdoptMinimized();     // the stage's apps whose windows were all minimized go to the strip
+    void KeepPicture();        // a picture of the window in front, ready for when it is minimized
     void Save();
     void Load();
     int Capacity() const;
@@ -136,7 +145,11 @@ private:
     Surface flight_; // over the whole screen while pictures fly
     WindowSnapshots snapshots_;
     winrt::com_ptr<IVirtualDesktopManager> desktops_; // the strip shows the current virtual desktop's windows
-    bool enabled_ = false, onRight_ = false, autoHide_ = false;
+    bool enabled_ = false, onRight_ = false, autoHide_ = false, minimizeToStrip_ = false;
+    std::unordered_map<HWND, RECT> up_; // the stage's windows up on this screen at the last look, and where (px)
+    HWINEVENTHOOK minimizeHook_ = nullptr;
+    HWND front_ = nullptr;    // the stage's window in front at the last look
+    ULONGLONG frontSince_ = 0; // since when (its picture waits until it has drawn itself)
     bool applied_ = false;             // the settings have said once whether it is on
     std::wstring saved_;               // stage.json as last written
     HWND raise_ = nullptr;             // to put back on top once the windows coming back have

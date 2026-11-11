@@ -62,16 +62,20 @@
 
             <ListView x:Name="Nav" SelectionMode="Single" SelectionChanged="OnNavChanged"
                       AutomationProperties.Name="导航" VerticalAlignment="Top" ItemContainerStyle="{StaticResource NavItemStyle}">
-                <ListViewItem AutomationProperties.Name="材质"><local:NavLabel Glyph="&#xE790;" Text="材质" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="形状"><local:NavLabel Glyph="&#xE7C9;" Text="形状" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="任务栏"><local:NavLabel Glyph="&#xE718;" Text="任务栏" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="通知"><local:NavLabel Glyph="&#xEA8F;" Text="通知" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="小组件"><local:NavLabel Glyph="&#xE8A9;" Text="小组件" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="台前调度"><local:NavLabel Glyph="&#xE7C4;" Text="台前调度" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="显示器"><local:NavLabel Glyph="&#xE7F4;" Text="显示器" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="系统"><local:NavLabel Glyph="&#xE770;" Text="系统" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="设计语言" Margin="0,18,0,2"><local:NavLabel Glyph="&#xE8D2;" Text="设计语言" /></ListViewItem>
-                <ListViewItem AutomationProperties.Name="关于"><local:NavLabel Glyph="&#xE946;" Text="关于" /></ListViewItem>
+                <ListViewItem Tag="0" AutomationProperties.Name="材质"><local:NavLabel Glyph="&#xE790;" Text="材质" /></ListViewItem>
+                <ListViewItem Tag="1" AutomationProperties.Name="形状"><local:NavLabel Glyph="&#xE7C9;" Text="形状" /></ListViewItem>
+                <ListViewItem Tag="2" AutomationProperties.Name="任务栏"><local:NavLabel Glyph="&#xE718;" Text="任务栏" /></ListViewItem>
+                <ListViewItem Tag="10" AutomationProperties.Name="开始菜单"><local:NavLabel Glyph="&#xE8FC;" Text="开始菜单" Sub="True" /></ListViewItem>
+                <ListViewItem Tag="11" AutomationProperties.Name="托盘"><local:NavLabel Glyph="&#xE70E;" Text="托盘" Sub="True" /></ListViewItem>
+                <ListViewItem Tag="12" AutomationProperties.Name="状态栏"><local:NavLabel Glyph="&#xE701;" Text="状态栏" Sub="True" /></ListViewItem>
+                <ListViewItem Tag="13" AutomationProperties.Name="时间"><local:NavLabel Glyph="&#xE823;" Text="时间" Sub="True" /></ListViewItem>
+                <ListViewItem Tag="3" AutomationProperties.Name="通知"><local:NavLabel Glyph="&#xEA8F;" Text="通知" Sub="True" /></ListViewItem>
+                <ListViewItem Tag="4" AutomationProperties.Name="小组件"><local:NavLabel Glyph="&#xE8A9;" Text="小组件" /></ListViewItem>
+                <ListViewItem Tag="5" AutomationProperties.Name="台前调度"><local:NavLabel Glyph="&#xE7C4;" Text="台前调度" /></ListViewItem>
+                <ListViewItem Tag="6" AutomationProperties.Name="显示器"><local:NavLabel Glyph="&#xE7F4;" Text="显示器" /></ListViewItem>
+                <ListViewItem Tag="7" AutomationProperties.Name="系统"><local:NavLabel Glyph="&#xE770;" Text="系统" /></ListViewItem>
+                <ListViewItem Tag="8" AutomationProperties.Name="设计语言" Margin="0,18,0,2"><local:NavLabel Glyph="&#xE8D2;" Text="设计语言" /></ListViewItem>
+                <ListViewItem Tag="9" AutomationProperties.Name="关于"><local:NavLabel Glyph="&#xE946;" Text="关于" /></ListViewItem>
             </ListView>
 
             <StackPanel Grid.Row="1" Spacing="4" Margin="10,0,6,0">
@@ -295,6 +299,7 @@
                     <StackPanel x:Name="MainNotify" Visibility="Collapsed" Spacing="10">
                         <Border x:Name="NotifyStage" Height="340" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnNotifyStageSizeChanged">
                             <Grid>
+                                <Canvas x:Name="NotifyBar" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
                                 <Canvas x:Name="NotifyCards" HorizontalAlignment="Left" VerticalAlignment="Top">
                                     <Canvas.Clip><RectangleGeometry x:Name="NotifyPreviewClip" /></Canvas.Clip>
                                     <Border x:Name="NotifyBackCard">
@@ -330,6 +335,40 @@
                             <TextBlock x:Name="NotifyCaption" Style="{StaticResource FootnoteStyle}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="4,0,0,0" />
                             <Button Grid.Column="1" Content="再弹一次" Click="OnReplayNotify" HorizontalAlignment="Right" />
                         </Grid>
+                    </StackPanel>
+
+                    <!-- ==== The bar's parts: the start menu, the tray, the status entry, the time; a preview each ==== -->
+                    <StackPanel x:Name="MainStart" Visibility="Collapsed" Spacing="10">
+                        <Border x:Name="StartStage" Height="520" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnModuleStageSizeChanged">
+                            <Grid>
+                                <Canvas x:Name="StartCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                                <Border CornerRadius="28" BorderThickness="1" BorderBrush="#1F000000" IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                    <StackPanel x:Name="MainTray" Visibility="Collapsed" Spacing="10">
+                        <Border x:Name="TrayStage" Height="520" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnModuleStageSizeChanged">
+                            <Grid>
+                                <Canvas x:Name="TrayCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                                <Border CornerRadius="28" BorderThickness="1" BorderBrush="#1F000000" IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                    <StackPanel x:Name="MainStatus" Visibility="Collapsed" Spacing="10">
+                        <Border x:Name="StatusStage" Height="520" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnModuleStageSizeChanged">
+                            <Grid>
+                                <Canvas x:Name="StatusCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                                <Border CornerRadius="28" BorderThickness="1" BorderBrush="#1F000000" IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                    <StackPanel x:Name="MainClock" Visibility="Collapsed" Spacing="10">
+                        <Border x:Name="ClockStage" Height="520" CornerRadius="28" Background="#FFCBD3DD" SizeChanged="OnModuleStageSizeChanged">
+                            <Grid>
+                                <Canvas x:Name="ClockCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                                <Border CornerRadius="28" BorderThickness="1" BorderBrush="#1F000000" IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
                     </StackPanel>
 
                     <!-- ==== Widgets: the desktop's layout, and the gallery ==== -->
@@ -402,7 +441,6 @@
                         <Border Style="{StaticResource TileStyle}">
                             <StackPanel Spacing="16">
                                 <TextBlock Text="任务栏显示方式" Style="{StaticResource SectionStyle}" />
-                                <TextBlock Text="像 macOS Dock 一样，在另一块屏幕底边停留即可唤出任务栏；也可以固定显示位置。" Style="{StaticResource RowNoteStyle}" />
                                 <RadioButton x:Name="DockDisplayFollow" Content="在鼠标所在屏幕底边唤出" Tag="follow" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
                                 <RadioButton x:Name="DockDisplayPrimary" Content="仅在系统主显示器显示" Tag="primary" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
                                 <RadioButton x:Name="DockDisplayFixed" Content="固定到指定显示器" Tag="fixed" GroupName="dockdisplay" Checked="OnDisplayModeChecked" />
@@ -419,16 +457,13 @@
                                     <ComboBoxItem Content="主任务栏和打开了窗口的任务栏" />
                                     <ComboBoxItem Content="打开了窗口的任务栏" />
                                 </ComboBox>
-                                <TextBlock Text="运行标记和窗口预览遵循此规则；固定应用始终保留。主任务栏指系统主显示器上的 Atrium 任务栏。" Style="{StaticResource RowNoteStyle}" />
                             </StackPanel>
                         </Border>
                         <local:ToggleTile x:Name="TaskbarRightPrimaryOnlySwitch" Title="仅在主屏显示任务栏右侧元素"
-                                          SwitchName="仅在主屏显示任务栏右侧元素" Toggled="OnTaskbarRightPrimaryOnlyToggled"
-                                          Note="开启后，其他屏幕的任务栏隐藏系统托盘、状态圆环、时钟日期和通知按钮。" />
+                                          SwitchName="仅在主屏显示任务栏右侧元素" Toggled="OnTaskbarRightPrimaryOnlyToggled" />
                         <Border Style="{StaticResource TileStyle}">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="桌面显示器" Style="{StaticResource SectionStyle}" />
-                                <TextBlock Text="小组件和台前调度留在这块屏幕上，不随任务栏移动。其他屏幕的窗口照常使用。" Style="{StaticResource RowNoteStyle}" />
                                 <ComboBox x:Name="DesktopDisplayPicker" DisplayMemberPath="Name" HorizontalAlignment="Stretch" AutomationProperties.Name="小组件与台前调度显示器" SelectionChanged="OnDesktopDisplayChanged" />
                             </StackPanel>
                         </Border>
@@ -545,8 +580,7 @@
                                     <Button Style="{StaticResource ResetButtonStyle}" Tag="size" Click="OnGroupReset" AutomationProperties.Name="恢复尺寸的默认值" />
                                 </Grid>
                                 <StackPanel x:Name="SizeRows" />
-                                <local:ToggleTile x:Name="HoverRiseSwitch" Title="跟随鼠标拱起" SwitchName="背景跟随鼠标拱起" Toggled="OnHoverRiseToggled" Flat="True"
-                                                  Note="背景随鼠标位置向上拱起，幅度跟随任务栏的悬停放大设置。" />
+                                <local:ToggleTile x:Name="HoverRiseSwitch" Title="跟随鼠标拱起" SwitchName="背景跟随鼠标拱起" Toggled="OnHoverRiseToggled" Flat="True" />
                             </StackPanel>
                             <StackPanel>
                                 <Grid>
@@ -569,18 +603,6 @@
                             </StackPanel>
                             <StackPanel x:Name="DockContent">
                                 <TextBlock Text="栏上显示" Style="{StaticResource SectionStyle}" />
-                                <local:ToggleTile x:Name="TraySwitch" Title="系统托盘" SwitchName="显示系统托盘" Toggled="OnBarContentToggled" Flat="True" />
-                                <local:ToggleTile x:Name="StatusSwitch" Title="状态栏" SwitchName="显示状态栏" Toggled="OnBarContentToggled" Flat="True" />
-                                <StackPanel Style="{StaticResource FlatRowStyle}">
-                                    <TextBlock Text="状态栏图标" Style="{StaticResource RowTitleStyle}" />
-                                    <local:SegmentTrack>
-                                            <RadioButton x:Name="StatusRing" GroupName="statusstyle" Content="圆环" Tag="ring" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
-                                            <RadioButton x:Name="StatusIcons" GroupName="statusstyle" Content="系统图标" Tag="icons" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
-                                        </local:SegmentTrack>
-                                </StackPanel>
-                                <local:ToggleTile x:Name="NotificationsSwitch" Title="通知" SwitchName="显示通知按钮" Toggled="OnBarContentToggled" Flat="True" />
-                                <local:ToggleTile x:Name="ClockSwitch" Title="时钟和日期" SwitchName="显示时钟和日期" Toggled="OnClockToggled" Flat="True"
-                                                  Note="在栏的右端，使用系统的时间与日期格式。" />
                                 <local:ToggleTile x:Name="RunningSwitch" Title="正在运行的应用" SwitchName="显示正在运行的应用" Toggled="OnRunningToggled" Flat="True"
                                                   Note="固定的应用之后，显示正在运行的其他应用，下方带一个小圆点。" />
                                 <StackPanel Style="{StaticResource FlatRowStyle}">
@@ -609,8 +631,60 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- Notifications: how long, what they show, where from -->
+                        <!-- The start menu: its size, the status and the tray's buttons in its capsule -->
+                        <StackPanel x:Name="SideStart" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="开始菜单" Style="{StaticResource SectionStyle}" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="大小" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="StartSmall" GroupName="startsize" Content="小" Tag="small" Style="{StaticResource SegmentStyle}" Checked="OnStartSizeChecked" />
+                                        <RadioButton x:Name="StartMedium" GroupName="startsize" Content="中" Tag="medium" Style="{StaticResource SegmentStyle}" Checked="OnStartSizeChecked" />
+                                        <RadioButton x:Name="StartLarge" GroupName="startsize" Content="大" Tag="large" Style="{StaticResource SegmentStyle}" Checked="OnStartSizeChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
+                                <local:ToggleTile x:Name="StartStatusSwitch" Title="状态栏" SwitchName="开始菜单里的状态栏" Toggled="OnBarContentToggled" Flat="True" />
+                                <local:ToggleTile x:Name="StartTraySwitch" Title="托盘按钮" SwitchName="开始菜单里的托盘按钮" Toggled="OnBarContentToggled" Flat="True" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- The tray -->
+                        <StackPanel x:Name="SideTray" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="托盘" Style="{StaticResource SectionStyle}" />
+                                <local:ToggleTile x:Name="TraySwitch" Title="在任务栏上显示" SwitchName="显示系统托盘" Toggled="OnBarContentToggled" Flat="True" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- The status entry: shown, as a ring or as icons -->
+                        <StackPanel x:Name="SideStatus" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="状态栏" Style="{StaticResource SectionStyle}" />
+                                <local:ToggleTile x:Name="StatusSwitch" Title="在任务栏上显示" SwitchName="显示状态栏" Toggled="OnBarContentToggled" Flat="True" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="图标" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="StatusRing" GroupName="statusstyle" Content="圆环" Tag="ring" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
+                                        <RadioButton x:Name="StatusIcons" GroupName="statusstyle" Content="系统图标" Tag="icons" Style="{StaticResource SegmentStyle}" Checked="OnStatusStyleChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- The time -->
+                        <StackPanel x:Name="SideClock" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="时间" Style="{StaticResource SectionStyle}" />
+                                <local:ToggleTile x:Name="ClockSwitch" Title="时钟和日期" SwitchName="显示时钟和日期" Toggled="OnClockToggled" Flat="True" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Notifications: the bell, how long, what they show, where from -->
                         <StackPanel x:Name="SideNotify" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="任务栏" Style="{StaticResource SectionStyle}" />
+                                <local:ToggleTile x:Name="NotificationsSwitch" Title="通知按钮" SwitchName="显示通知按钮" Toggled="OnBarContentToggled" Flat="True" />
+                            </StackPanel>
                             <StackPanel>
                                 <Grid>
                                     <TextBlock Text="弹出" Style="{StaticResource SectionStyle}" />
@@ -623,7 +697,6 @@
                                             <RadioButton x:Name="NotifyAtDock" GroupName="notifyplacement" Content="跟随任务栏" Tag="dock" Style="{StaticResource SegmentStyle}" Checked="OnNotifyPlacementChecked" />
                                             <RadioButton x:Name="NotifyAtTopRight" GroupName="notifyplacement" Content="主屏右上角" Tag="topRight" Style="{StaticResource SegmentStyle}" Checked="OnNotifyPlacementChecked" />
                                         </local:SegmentTrack>
-                                        <TextBlock Text="默认跟随任务栏；主屏右上角模式下，新通知弹入，已有通知向下让位。" Style="{StaticResource RowNoteStyle}" />
                                     </StackPanel>
                                     <local:ToggleTile x:Name="HideBodySwitch" Title="隐藏通知正文" SwitchName="隐藏通知正文" Toggled="OnHideBodyToggled" Flat="True"
                                                       Note="卡片只显示应用和标题；通知窗口同时不会出现在截图和屏幕共享里。" />
@@ -660,6 +733,7 @@
                                             <RadioButton x:Name="StageAutoHide" GroupName="stagemode" Content="悬停弹出" Tag="hover" Style="{StaticResource SegmentStyle}" Checked="OnStageModeChecked" />
                                         </local:SegmentTrack>
                                 </StackPanel>
+                                <local:ToggleTile x:Name="StageMinimizeSwitch" Title="窗口最小化到台前调度" SwitchName="窗口最小化到台前调度" Toggled="OnStageMinimizeToggled" Flat="True" />
                             </StackPanel>
                             <StackPanel>
                                 <TextBlock Text="操作" Style="{StaticResource SectionStyle}" />

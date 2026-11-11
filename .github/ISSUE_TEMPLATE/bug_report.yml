@@ -1,28 +1,86 @@
-name: Bug report
-description: Something in Atrium does not work as it should
+name: 问题反馈 / Bug report
+description: Atrium 有地方不正常 / Something in Atrium does not work as it should
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！按下面几栏填写，问题越容易复现，修得越快。中文或英文都可以。
+        Thanks for reporting! The easier the problem is to reproduce, the sooner it gets fixed. Chinese or English are both fine.
+
+        **收集信息的小提示 / Quick guide**
+        - **Atrium 版本 / Atrium version**：设置中心 › 关于 / Settings › 关于 (About)
+        - **Windows 版本 / Windows version**：按 `Win + R`，输入 `winver` 回车，抄下第二行，例如“版本 24H2（OS 内部版本 26100.2454）” / press `Win + R`, type `winver`, press Enter, copy the second line, e.g. "Version 24H2 (OS Build 26100.2454)"
+        - **日志 / Logs**：按 `Win + R`，输入 `%LOCALAPPDATA%\Atrium\logs` 回车 / press `Win + R`, type `%LOCALAPPDATA%\Atrium\logs`, press Enter
+          - `core.log`：任务栏、开始菜单、台前调度、小组件、通知等的日志；上一份是 `core.1.log` / the taskbar, start menu, Stage Manager, widgets, notifications…; the previous one is `core.1.log`
+          - `settings.log`：设置中心崩溃或出错时才有 / only when the settings app crashed or failed
+        - **截图和录屏 / Screenshots and videos**：直接拖进输入框即可上传；视频建议 10 MB 以内的 mp4 / drag them into a text box; keep videos under 10 MB (mp4)
   - type: textarea
     id: what
     attributes:
-      label: What happened
-      description: What you did, what you expected and what you saw.
+      label: 发生了什么 / What happened
+      description: 做了什么、期望看到什么、实际看到什么 / What you did, what you expected and what you saw.
+      placeholder: |
+        1. 打开…… / Open…
+        2. 点击…… / Click…
+        期望 / Expected：
+        实际 / Actual：
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 出现频率 / How often
+      options:
+        - 每次都出现 / Every time
+        - 经常出现 / Often
+        - 偶尔出现 / Sometimes
+        - 只出现过一次 / Only once
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: 截图或录屏 / Screenshots or video
+      description: |
+        强烈建议附上，动画、闪烁、位置不对这类问题有录屏最好。直接把图片或视频拖进来；注意遮住聊天记录等个人内容。
+        Strongly recommended, a video is best for animation, flicker or placement problems. Drag images or videos in; hide personal content such as chats.
+  - type: input
+    id: version
+    attributes:
+      label: Atrium 版本 / Atrium version
+      description: 设置中心 › 关于 / Settings › 关于 (About)
+      placeholder: "2.4.0"
     validations:
       required: true
   - type: input
     id: build
     attributes:
-      label: Windows build
-      description: Output of `winver`, e.g. 26100.2454
+      label: Windows 版本 / Windows version
+      description: "`Win + R` › `winver` 的第二行 / the second line of `winver`"
+      placeholder: 版本 24H2（OS 内部版本 26100.2454） / Version 24H2 (OS Build 26100.2454)
     validations:
       required: true
   - type: textarea
     id: hardware
     attributes:
-      label: Displays and GPUs
-      description: Number of monitors, resolution, scaling, HDR, GPUs.
+      label: 显示器和显卡 / Displays and GPUs
+      description: |
+        显示器数量、分辨率、缩放比例（设置 › 系统 › 屏幕）、是否开 HDR、显卡型号。玻璃显示、多屏、卡顿类问题必填。
+        Number of monitors, resolution, scale (Settings › System › Display), HDR on or off, GPU model. Needed for glass, multi-monitor and performance problems.
+      placeholder: 1 块 2560×1600，缩放 200%，HDR 关，Intel Arc / one 2560×1600 at 200%, HDR off, Intel Arc
   - type: textarea
     id: results
     attributes:
-      label: Log
-      description: The relevant lines of `%LOCALAPPDATA%\Atrium\logs\core.log`. Do not include screenshots with personal content.
+      label: 日志 / Log
+      description: |
+        问题出现后尽快把 `%LOCALAPPDATA%\Atrium\logs\core.log` 拖进来（设置中心的问题再加 `settings.log`），并写上大概几点发生的。如果上传不了 .log 文件，把扩展名改成 .txt 再拖。
+        Soon after the problem happens, drag `%LOCALAPPDATA%\Atrium\logs\core.log` in (plus `settings.log` for settings app problems) and note roughly when it happened. If .log files are refused, rename it to .txt.
+      placeholder: 大约 21:35 出现 / Happened around 21:35
+  - type: textarea
+    id: config
+    attributes:
+      label: 相关设置文件（可选）/ Settings files (optional)
+      description: |
+        和某个选项有关时，可以附上 `%LOCALAPPDATA%\Atrium` 里的文件：`settings.json`（设置），`widgets.json`（小组件），`stage.json`（台前调度），`start.json`（开始菜单）。里面没有密码，但有固定应用的路径等使用痕迹，介意的话只写改过哪些选项即可。
+        If an option is involved, attach files from `%LOCALAPPDATA%\Atrium`: `settings.json` (settings), `widgets.json` (widgets), `stage.json` (Stage Manager), `start.json` (start menu). They hold no passwords but do show pinned app paths; if you prefer, just list the options you changed.

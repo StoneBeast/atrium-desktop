@@ -144,6 +144,20 @@ bool StartMenu::Fits(int size) const
     return r.bottom - r.top >= std::lround(z.height * scale) - 1 && r.right - r.left >= std::lround(z.width * scale) - 1;
 }
 
+void StartMenu::SetPreferredSize(const std::wstring& name)
+{
+    const int size = name == L"small" ? 0 : name == L"medium" ? 1 : name == L"large" ? 2 : -1;
+    if (size < 0 || size == layout_.size)
+        return;
+    layout_.size = size;
+    SaveStartLayout(layout_);
+    if (surface_.Visible())
+        SetSize(size);
+    Log(L"start: size %s from the settings", name.c_str());
+}
+
+std::wstring StartMenu::SizeName() const { return layout_.size == 0 ? L"small" : layout_.size == 2 ? L"large" : L"medium"; }
+
 void StartMenu::SetSize(int size)
 {
     // The grid takes the new size at once (the tiles glide to their places), the glass springs to it.
@@ -1230,8 +1244,8 @@ void StartMenu::PaintGrip(Canvas& c, const Theme& t)
     c.Arc(m.right - r, r, r - 6, -80.f, -10.f, Alpha(t.subtext, a), 3.5f);
 }
 
-// The capsule: the account on the left; network, volume, battery and
-// power on the right, round buttons like the bar's.
+// The capsule: the account on the left; network, volume, battery (unless turned
+// off: startStatus), the tray (startTray) and power on the right, round buttons like the bar's.
 void StartMenu::PaintShelf(Canvas& c, const Theme& t)
 {
     const D2D1_RECT_F shelf = ShelfRect();
@@ -1258,14 +1272,20 @@ void StartMenu::PaintShelf(Canvas& c, const Theme& t)
         x = b.left - 2;
     };
     button(L"power", L"\uE7E8", L"", false);
-    if (status_.battery) {
+    if (showTray_) {
+        c.Line(x - 4, cy - 12, x - 4, cy + 12, t.divider);
+        x -= 8;
+        button(L"tray", L"\uE70E", L"", false);
+    }
+    if (showStatus_ && status_.battery) {
         int level = std::clamp(status_.batteryPercent / 10, 0, 10);
         std::wstring glyph(1, wchar_t((status_.charging ? 0xEBAB : 0xEBA0) + level));
         button(L"battery", glyph, std::to_wstring(status_.batteryPercent) + L"%", false);
     }
-    if (status_.audio)
+    if (showStatus_ && status_.audio)
         button(L"volume", status_.muted ? L"\uE74F" : status_.volume < 34 ? L"\uE993" : status_.volume < 67 ? L"\uE994" : L"\uE995", L"", status_.muted);
-    button(L"network", !status_.connected ? L"\uEB55" : status_.wifi ? L"\uE701" : L"\uE839", L"", !status_.connected);
+    if (showStatus_)
+        button(L"network", !status_.connected ? L"\uEB55" : status_.wifi ? L"\uE701" : L"\uE839", L"", !status_.connected);
 
     // Account, in what is left.
     std::wstring name = userName_.empty() ? L"用户" : userName_;
@@ -1706,6 +1726,8 @@ void StartMenu::EndResize()
         layout_.size = shown_;
         SaveStartLayout(layout_);
         Log(L"start: sized to %d x %d tiles", cols_, rows_);
+        if (onSize)
+            onSize(SizeName());
     }
     surface_.Invalidate();
 }
@@ -1925,6 +1947,8 @@ void StartMenu::ContextMenu(const std::wstring& id, POINT screen)
                        layout_.size = shown_;
                        SaveStartLayout(layout_);
                        Log(L"start: sized to %d x %d tiles", cols_, rows_);
+                       if (onSize)
+                           onSize(SizeName());
                        break;
                    case kReset:
                        layout_.custom = false;
@@ -2144,7 +2168,7 @@ bool StartMenu::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
             rippleX_ = x;
             rippleY_ = y;
             rippleMs_ = ClockMs();
-            // 玻璃涟漪使用内容坐标，保留菜单的垂直偏移。
+            // The glass ripples in the window's content coordinates (the panel sits lower in it).
             surface_.Ripple(float(content.x) / s, float(content.y) / s);
         }
         surface_.Invalidate();

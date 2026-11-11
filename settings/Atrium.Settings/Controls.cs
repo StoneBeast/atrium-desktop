@@ -35,6 +35,18 @@ public sealed class NavLabel : StackPanel
 
     public string Glyph { get => _icon.Glyph; set => _icon.Glyph = value; }
     public string Text { get => _text.Text; set => _text.Text = value; }
+
+    // A part of the item above it (the bar's start menu, tray...): indented, a size smaller.
+    public bool Sub
+    {
+        get => Margin.Left > 0;
+        set
+        {
+            Margin = new Thickness(value ? 22 : 0, 0, 0, 0);
+            _icon.FontSize = value ? 14 : 16;
+            _text.FontSize = value ? 14 : 15;
+        }
+    }
 }
 
 // A named switch; supporting help is available on hover.

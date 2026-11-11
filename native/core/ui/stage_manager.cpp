@@ -3,6 +3,7 @@
 #include "clock.h"
 #include "log.h"
 #include "settings.h"
+#include "shell/displays.h"
 
 #include <dwmapi.h>
 #include <windowsx.h>
@@ -54,6 +55,8 @@ constexpr UINT kFlightIdleMs = 60000;
 // A window's picture taken this recently (the pointer went to the strip) is used as it is: the window
 // goes at once.
 constexpr ULONGLONG kFreshMs = 4000;
+// A window in front this long has drawn itself (its picture is kept from then on).
+constexpr ULONGLONG kDrawnMs = 1500;
 
 std::wstring StatePath()
 {
@@ -132,6 +135,22 @@ StageManager::StageManager(HINSTANCE instance, TaskModel& tasks)
     Load(); // windows a previous run put away (it may not have ended well)
 }
 
+StageManager::~StageManager()
+{
+    if (minimizeHook_)
+        UnhookWinEvent(minimizeHook_);
+}
+
+namespace {
+StageManager* g_minimizing = nullptr; // the one Stage Manager, for its minimize hook
+
+void CALLBACK OnMinimizeStart(HWINEVENTHOOK, DWORD, HWND h, LONG object, LONG, DWORD, DWORD)
+{
+    if (object == OBJID_WINDOW && g_minimizing)
+        g_minimizing->Minimized(h);
+}
+} // namespace
+
 // ---- the stage ---------------------------------------------------------------------------------
 
 void StageManager::SetEnabled(bool on)
@@ -183,6 +202,24 @@ void StageManager::SetAutoHide(bool autoHide)
         Watch();
 }
 
+void StageManager::SetMinimizeToStrip(bool on)
+{
+    if (on == minimizeToStrip_)
+        return;
+    minimizeToStrip_ = on;
+    ReleaseUp();
+    // Out of context, on this thread: the picture leaves the window's place as it goes down.
+    if (on && !minimizeHook_) {
+        g_minimizing = this;
+        minimizeHook_ = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZESTART, nullptr, OnMinimizeStart, 0, 0,
+                                        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    } else if (!on && minimizeHook_) {
+        UnhookWinEvent(minimizeHook_);
+        minimizeHook_ = nullptr;
+    }
+    Log(L"stage: minimized windows %s", on ? L"go to the strip" : L"stay minimized");
+}
+
 void StageManager::SetMonitor(HMONITOR monitor, bool refresh)
 {
     if (monitor == monitor_ && !refresh)
@@ -202,6 +239,7 @@ void StageManager::Update(const std::vector<TaskItem>& items)
     if (!enabled_)
         return;
     Prune();
+    AdoptMinimized();
     if (!pending_.empty() && GetTickCount64() > pendingUntil_)
         pending_.clear();
     HWND fg = GetForegroundWindow();
@@ -216,6 +254,7 @@ void StageManager::Update(const std::vector<TaskItem>& items)
                 Stage(SetOf(active->key), false, root, false);
         }
     }
+    AdoptMinimized(); // the stage's windows as they are now, ready to be minimized
     Rebuild();
 }
 
@@ -379,7 +418,8 @@ void StageManager::PutDown(HWND window, bool fly)
 void StageManager::PictureTaken()
 {
     for (WindowSnapshots::Result& r : snapshots_.Take()) {
-        Log(L"stage: picture of %p %s", r.window, r.picture.ok ? (std::to_wstring(r.picture.width) + L"x" + std::to_wstring(r.picture.height)).c_str() : L"(none)");
+        if (parked_.contains(r.window))
+            Log(L"stage: picture of %p %s", r.window, r.picture.ok ? (std::to_wstring(r.picture.width) + L"x" + std::to_wstring(r.picture.height)).c_str() : L"(none)");
         if (r.picture.ok) {
             Picture& p = pictures_[r.window];
             if (p.gen) {
@@ -392,7 +432,9 @@ void StageManager::PictureTaken()
             p.taken = GetTickCount64();
             PutDown(r.window, true);
         } else {
-            PutDown(r.window, false);
+            // None taken (or a blank one): an earlier picture flies, if there is one.
+            auto old = pictures_.find(r.window);
+            PutDown(r.window, old != pictures_.end() && old->second.picture && old->second.picture->ok);
         }
     }
     surface_.Invalidate();
@@ -438,7 +480,8 @@ void StageManager::Unpark(const Set& keys, HWND front, bool activate, const std:
         parked_.erase(h);
         if (Flying(h))
             continue; // up when its picture lands
-        Transitions(h, true);
+        if (!minimizeToStrip_) // else it stays without: up on the stage, minimizing sends its picture to the strip
+            Transitions(h, true);
         if (h != front && IsWindow(h))
             ShowQuietly(h);
     }
@@ -482,6 +525,7 @@ void StageManager::Pick(const Set& keys, bool add)
 
 void StageManager::RestoreAll()
 {
+    ReleaseUp();
     // Pictures on their way back: their windows come up now.
     for (Flight& f : flights_)
         if (!f.toStrip && !f.restored && IsWindow(f.window)) {
@@ -509,6 +553,153 @@ void StageManager::RestoreAll()
     Rebuild();
 }
 
+// Minimized on the stage (setting stageMinimize): an app on the stage whose
+// windows on this screen are all down now (some of them were up at the last look) leaves the stage
+// and waits at the top of the strip, its windows put away as if Atrium had (a pick there brings them
+// back, where they were). Windows minimized while the app keeps others up stay minimized.
+void StageManager::Minimized(HWND window)
+{
+    if (minimizeToStrip_ && enabled_ && up_.contains(window) && AdoptMinimized())
+        Rebuild();
+}
+
+// The stage's windows get their own minimize animation back (the option off, Stage Manager off, exit):
+// also those just back from the strip and not looked at yet.
+void StageManager::ReleaseUp()
+{
+    for (const auto& [h, frame] : up_)
+        if (IsWindow(h) && !parked_.contains(h) && !Flying(h))
+            Transitions(h, true);
+    for (const TaskItem& t : items_)
+        for (HWND h : t.windows)
+            if (!up_.contains(h) && !parked_.contains(h) && !Flying(h) && IsWindow(h))
+                Transitions(h, true);
+    up_.clear();
+}
+
+bool StageManager::AdoptMinimized()
+{
+    if (!minimizeToStrip_ || !enabled_) {
+        for (const auto& [h, frame] : up_)
+            if (IsWindow(h) && !parked_.contains(h))
+                Transitions(h, true);
+        up_.clear();
+        return false;
+    }
+    std::unordered_map<HWND, RECT> up;
+    Set gone;
+    std::vector<HWND> flyIn;
+    const ULONGLONG now = GetTickCount64();
+    for (const TaskItem& t : items_) {
+        if (!Has(stage_, t.key))
+            continue;
+        bool anyUp = false;
+        std::vector<HWND> down;
+        for (HWND h : t.windows) {
+            if (parked_.contains(h) || !IsWindowVisible(h) || !OnMonitor(h, monitor_))
+                continue;
+            if (!IsIconic(h)) {
+                anyUp = true;
+                RECT r{};
+                if (auto seen = up_.find(h); seen != up_.end())
+                    r = seen->second;
+                if (FAILED(DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+                    GetWindowRect(h, &r);
+                up[h] = r;
+            } else if (up_.contains(h)) {
+                down.push_back(h);
+            }
+        }
+        if (anyUp || down.empty())
+            continue;
+        for (HWND h : down) {
+            Parked p;
+            p.key = t.key;
+            p.seq = ++seq_;
+            p.since = now;
+            p.down = true;
+            p.frame = up_[h];
+            parked_[h] = p;
+            Transitions(h, false); // picked in the strip, its picture flies back: no zoom of its own
+            flyIn.push_back(h);
+        }
+        gone.push_back(t.key);
+    }
+    // Up on the stage, a window has no minimize animation of its own: minimized, its picture flies
+    // into the strip instead. Off the stage, it has its own again.
+    for (const auto& [h, frame] : up)
+        if (!up_.contains(h) || Flying(h))
+            Transitions(h, false);
+    for (const auto& [h, frame] : up_)
+        if (!up.contains(h) && !parked_.contains(h) && IsWindow(h))
+            Transitions(h, true);
+    up_ = std::move(up);
+    if (gone.empty())
+        return false;
+    for (const std::wstring& k : gone) {
+        std::erase(stage_, k);
+        for (Set& old : recent_)
+            std::erase(old, k);
+    }
+    std::erase_if(recent_, [](const Set& set) { return set.empty(); });
+    recent_.insert(recent_.begin(), gone);
+    // Their pictures fly from where the windows were into the strip, as a window put away does.
+    for (HWND h : flyIn) {
+        std::wstring key;
+        auto picture = PictureOf(h, parked_[h].key, key);
+        if (!picture || !picture->ok || key.rfind(L"stage|w|", 0) != 0)
+            continue; // no picture yet: the card just comes
+        std::erase_if(flights_, [&](const Flight& f) { return f.window == h; });
+        Flight f;
+        f.window = h;
+        f.picture = picture;
+        f.key = key;
+        f.toStrip = true;
+        f.place = PlacePose(parked_[h].frame);
+        flights_.push_back(std::move(f));
+    }
+    if (std::any_of(flyIn.begin(), flyIn.end(), [&](HWND h) { return Flying(h); }))
+        Launch();
+    Log(L"stage: %s minimized to the strip", gone.front().c_str());
+    Save();
+    return true;
+}
+
+// The window in front, if on the stage: its picture kept fresh (every few seconds, and as the pointer
+// nears its title bar, where it is minimized), since a minimized window has none to take.
+void StageManager::KeepPicture()
+{
+    if (!minimizeToStrip_)
+        return;
+    HWND fg = GetForegroundWindow();
+    HWND root = fg ? GetAncestor(fg, GA_ROOTOWNER) : nullptr;
+    auto seen = root ? up_.find(root) : up_.end();
+    const ULONGLONG now = GetTickCount64();
+    if (root != front_) {
+        front_ = root;
+        frontSince_ = now;
+    }
+    if (seen == up_.end() || IsIconic(root))
+        return;
+    RECT r{};
+    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))) && !GetWindowRect(root, &r))
+        return;
+    seen->second = r; // where it comes back to
+    POINT p{};
+    GetCursorPos(&p);
+    const float s = PopupScale(WorkArea());
+    const bool titleBar = PtInRect(&r, p) && p.y < r.top + LONG(56 * s);
+    // Just opened or back up, a window has not drawn itself yet: its picture would be blank.
+    if (now - frontSince_ < kDrawnMs)
+        return;
+    const auto it = pictures_.find(root);
+    const ULONGLONG age = it == pictures_.end() ? ULLONG_MAX : now - it->second.taken;
+    if (age < (titleBar ? 1500ULL : 6000ULL))
+        return;
+    pictures_[root].taken = now; // asked for: not again meanwhile
+    snapshots_.Request(root, int(kBoxW * kPictureScale * s), int(kBoxH * kPictureScale * s), kPictureRadius * kPictureScale * s);
+}
+
 // Windows that went (closed, hidden to the tray) or came back some other way are no longer waiting.
 void StageManager::Prune()
 {
@@ -529,9 +720,16 @@ void StageManager::Prune()
             return std::none_of(parked_.begin(), parked_.end(), [&](const auto& kv) { return kv.second.key == k; });
         });
     std::erase_if(recent_, [](const Set& set) { return set.empty(); });
-    // Pictures of windows no longer waiting are old by the time they wait again.
+    // Pictures of windows no longer waiting are old by the time they wait again; but not those of the
+    // stage's (on their way back from the strip, or up): minimized, they go back with them.
+    std::unordered_set<HWND> staged;
+    if (minimizeToStrip_)
+        for (const TaskItem& t : items_)
+            if (Has(stage_, t.key))
+                staged.insert(t.windows.begin(), t.windows.end());
     std::erase_if(pictures_, [&](const auto& kv) {
-        if (parked_.contains(kv.first) || (IsWindow(kv.first) && now - kv.second.taken < kFreshMs))
+        if (parked_.contains(kv.first) || (IsWindow(kv.first) && now - kv.second.taken < kFreshMs) || up_.contains(kv.first) ||
+            Flying(kv.first) || (staged.contains(kv.first) && IsWindow(kv.first)))
             return false;
         std::wstring key = L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(kv.first)) + L"|" + std::to_wstring(kv.second.gen);
         surface_.ForgetImage(key);
@@ -862,12 +1060,16 @@ void StageManager::Watch()
         HWND fg = GetForegroundWindow();
         wchar_t cls[16] = {};
         const bool desktop = fg && GetClassNameW(fg, cls, 16) && (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW"));
+        // A window just minimized hands the foreground to the desktop: it goes to the strip first.
+        if (desktop && !onDesktop_ && AdoptMinimized())
+            Rebuild();
         if (desktop && !onDesktop_ && !stage_.empty()) {
             pending_.clear();
             Stage(Set{}, false, nullptr, false);
             Rebuild();
         }
         onDesktop_ = desktop;
+        KeepPicture();
     }
     if (!enabled_ || entries_.empty()) {
         peek_ = false;
@@ -891,7 +1093,7 @@ void StageManager::Watch()
         Show();
         return;
     }
-    if (!peek_ && edgeSince_ && now - edgeSince_ >= kEdgeMs) {
+    if (!peek_ && edgeSince_ && now - edgeSince_ >= kEdgeMs && !FullScreenInFront(monitor_)) {
         peek_ = true;
         leftAt_ = 0;
     }
@@ -1159,8 +1361,16 @@ void StageManager::PaintFlights(Canvas& c)
         DrawPicture(c, *f.picture, f.key, p, opacity);
         const bool done = f.toStrip ? t >= 1 : over >= kFlightFadeMs;
         if (done) {
-            if (!f.toStrip)
-                Transitions(f.window, true); // up again: its own animations back
+            // Up again: its own animations back, unless minimizing it on the stage sends its picture
+            // into the strip (then it stays without, and is looked at as the stage's from now).
+            if (!f.toStrip && minimizeToStrip_ && enabled_ && !IsIconic(f.window)) {
+                RECT r{};
+                if (FAILED(DwmGetWindowAttribute(f.window, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+                    GetWindowRect(f.window, &r);
+                up_[f.window] = r;
+            } else if (!f.toStrip) {
+                Transitions(f.window, true);
+            }
             it = flights_.erase(it);
             surface_.Invalidate(); // the card shows its picture now
         } else {

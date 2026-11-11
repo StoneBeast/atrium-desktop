@@ -53,7 +53,7 @@ The glass bends what is behind it, with a touch of highlight and dispersion at t
 
 - A floating capsule of glass at the bottom of the screen. Icons swell like a wave under the pointer; rest for a moment and the app's name appears.
 - Rest on an open app to see a live preview of each of its windows, and switch to or close one from there.
-- Drag pinned apps to reorder them. When the app in front goes full screen or maximised, the bar steps aside (or keep it up, or always hidden). Optionally, Win + 1…9 open the bar's apps.
+- Drag pinned apps to reorder them. When the app in front goes full screen or maximised, the bar steps aside (or keep it up, or always hidden). While a game, video or anything else fills the whole screen, the pointer at the bottom edge does not bring the bar up, just like the Windows taskbar, so a full-screen game is never pushed back to the desktop. Optionally, Win + 1…9 open the bar's apps.
 
 ### Start menu
 
@@ -64,7 +64,7 @@ The glass bends what is behind it, with a touch of highlight and dispersion at t
   </tr>
 </table>
 
-Opened from the Windows logo at the left of the bar, or optionally the Windows key. The apps pinned in the Windows start menu are here; drag them around, drop one onto another to make a folder and name it. Three sizes: small, medium and large. Just start typing to search apps and folders, no need to click the search box first; pinyin initials work too (wx finds 微信). All apps lists them A to Z with a letter index to jump through, and apps you do not want to see can be hidden. The strip below holds your account, network, volume, battery and power.
+Opened from the Windows logo at the left of the bar, or optionally the Windows key. The apps pinned in the Windows start menu are here; drag them around, drop one onto another to make a folder and name it. Three sizes: small, medium and large. Just start typing to search apps and folders, no need to click the search box first; pinyin initials work too (wx finds 微信). All apps lists them A to Z with a letter index to jump through, and apps you do not want to see can be hidden. The strip below holds your account, network, volume, battery and power; the settings pick the menu's size and can leave out its tray or status buttons.
 
 ### Status ring and control centre
 
@@ -89,7 +89,7 @@ Click the ring for the control centre: Wi‑Fi, Bluetooth, battery, casting, Sta
   <img src="docs/images/readme/widgets.jpg" alt="Widgets on the desktop" width="100%">
 </p>
 
-Ten kinds — clock, digital clock, calendar (with the lunar calendar), weather, battery, Bluetooth devices, system monitor, notes, reminders and photos — in three sizes. They snap to a grid wherever you drop them; hover one and an arc appears at its lower corner, drag it to resize. Widgets sit below all windows and come to the top when you press Win + D.
+Ten kinds — clock, digital clock, calendar (with the lunar calendar), weather, battery, Bluetooth devices, system monitor, notes, reminders and photos — in three sizes. The medium clock and digital clock show the time in a few cities; right-click and choose 更改城市… (Change city) to swap any of them. They snap to a grid wherever you drop them; hover one and an arc appears at its lower corner, drag it to resize. Widgets sit below all windows and come to the top when you press Win + D.
 
 <p align="center">
   <img src="docs/images/readme/widget-materials.jpg" alt="The widgets' three materials: like the taskbar, dusk and colour" width="100%">
@@ -106,7 +106,7 @@ Three materials: the clear glass **like the taskbar**; **dusk**, the same glass 
   </tr>
 </table>
 
-The app you are using stays in the middle of the screen; the others move to one side, their windows standing at an angle in a column, several windows of one app stacked together. Hover one and it turns to face you; click to bring it to the front, or Shift-click to group apps together. The side can always show, or slide out only when the pointer reaches the screen's edge. Turning Stage Manager off or quitting Atrium puts every window back.
+The app you are using stays in the middle of the screen; the others move to one side, their windows standing at an angle in a column, several windows of one app stacked together. Hover one and it turns to face you; click to bring it to the front, or Shift-click to group apps together. The side can always show, or slide out only when the pointer reaches the screen's edge. With “minimize windows to Stage Manager” on, minimizing the app in front sends its window's picture flying into the side instead of down to the taskbar. Turning Stage Manager off or quitting Atrium puts every window back.
 
 ## Getting started
 

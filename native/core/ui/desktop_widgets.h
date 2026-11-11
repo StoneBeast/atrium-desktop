@@ -89,6 +89,7 @@ private:
     void PlaceImeWindow(Widget& w);
     // Photos: a picture from the folder, read and scaled on a worker thread.
     void PickFolder(Widget& w);
+    void PickCity(Widget& w, POINT at);
     void LoadPhoto(Widget& w, bool another);
     void SampleSystem();
 

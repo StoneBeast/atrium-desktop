@@ -141,7 +141,13 @@ public sealed partial class MainWindow
     private BarGeometry? ComputeLayout(BarSettings s)
     {
         if (_heroW < 80 || _heroH < 80) return null;
-        double S = Math.Min(1.0, (_heroW - 48) / (HeroReferenceW + 2 * GlassSpec.InsetDip));
+        return BarLayout(s, _heroW, _heroH, Math.Min(1.0, (_heroW - 48) / (HeroReferenceW + 2 * GlassSpec.InsetDip)), true);
+    }
+
+    // The bar at scale S at the bottom of a view of viewW x viewH; `wave`: as if the pointer
+    // rested on the second app (else no magnification).
+    private BarGeometry BarLayout(BarSettings s, double viewW, double viewH, double S, bool wave)
+    {
         double H = s.Height, I = Math.Clamp(s.IconSize, 12, H - 16);
         double P = Math.Max(I + 4, Math.Min(H - 12, Math.Round(I * 1.55)));
         double v = Math.Floor((H - P) / 2), pad = v + 4, gap = Math.Max(4, Math.Round(I * 0.18));
@@ -153,7 +159,7 @@ public sealed partial class MainWindow
         double Content(int n) => Math.Max(2 * H, 2 * pad + P + 2 * gap + n * P + Math.Max(0, n - 1) * gap + (rightCount > 0 ? 2 * sepGap + rightW : 0));
         double mag = Math.Clamp(s.Magnify, 1, 2), pitch = P + gap;
         double stretch = mag > 1.001 ? Math.Ceiling((mag - 1) * pitch * 2.3) : 0;
-        double maxW = Math.Max(2 * H, Math.Min(s.Width, (_heroW - 16) / S - stretch));
+        double maxW = Math.Max(2 * H, Math.Min(s.Width, (viewW - 16) / S - stretch));
         int n = _previewPins.Length + (s.ShowRunning ? 1 : 0);
         while (n > 0 && Content(n) > maxW) n--;
         double barW = s.AutoWidth ? Math.Min(Content(n), maxW) : maxW;
@@ -174,12 +180,12 @@ public sealed partial class MainWindow
         double appsLeft = appsMin + Math.Max(0, (rightLeft - (rightCount > 0 ? 2 * sepGap : 0) - appsMin - (n * P + Math.Max(0, n - 1) * gap)) / 2);
         double reff = Math.Min(s.CornerRadius, Math.Min(H, barW) / 2);
 
-        double bx = (_heroW - barW * S) / 2;
-        double by = Math.Max(10, _heroH - s.Margin * S - H * S);
+        double bx = (viewW - barW * S) / 2;
+        double by = Math.Max(10, viewH - s.Margin * S - H * S);
         double X(double left) => left < 0 ? -1 : bx + left * S;
 
         // As if the pointer rested on the second app.
-        double k = mag > 1.001 ? mag - 1 : 0, range = pitch * 2.3 * S;
+        double k = wave && mag > 1.001 ? mag - 1 : 0, range = pitch * 2.3 * S;
         double centre = n > 1 ? bx + (appsLeft + pitch) * S + P * S / 2 : bx + (pad + P / 2) * S;
         double Map(double u)
         {
@@ -231,12 +237,12 @@ public sealed partial class MainWindow
         var clock = DateTime.Now;
         string time = clock.ToString("H:mm"), date = clock.ToString("yyyy/M/d");
         _face.SetClock(time, date);
-        var battery = BarFace.Battery();
-        _face.Layout(L, DarkInk(), L.N, running, _current.Magnify, 1, 0, 0, battery);
+        var status = StatusLook.Current();
+        _face.Layout(L, DarkInk(), L.N, running, _current.Magnify, 1, 0, 0, status);
         if (loupe)
         {
             _loupeFace.SetClock(time, date);
-            _loupeFace.Layout(L, DarkInk(), L.N, running, _current.Magnify, LoupeZoom, L.LoupeX0, L.LoupeY0, battery);
+            _loupeFace.Layout(L, DarkInk(), L.N, running, _current.Magnify, LoupeZoom, L.LoupeX0, L.LoupeY0, status);
         }
     }
 

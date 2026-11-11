@@ -37,17 +37,20 @@ internal sealed class BarSettings
     public double Margin { get; set; } = 10;
     public double IconSize { get; set; } = 30;
     public double Magnify { get; set; } = 1.7;         // icon scale under the pointer, 1 = off
-    public bool HoverRise { get; set; } = true;       // glass follows the magnification wave
+    public bool HoverRise { get; set; }               // glass follows the magnification wave (off unless chosen)
     public bool AutoWidth { get; set; } = true;
     public bool ShowClock { get; set; } = true;
     public bool ShowTray { get; set; } = true;
+    public bool StartTray { get; set; } = true;        // the tray's button in the start menu
+    public bool StartStatus { get; set; } = true;      // its network, volume and battery buttons
+    public string StartSize { get; set; } = "";        // small | medium | large; empty: not known yet (the core fills it in)
     public bool ShowStatus { get; set; } = true;
     public bool ShowNotifications { get; set; } = true;
     public bool ShowRunning { get; set; } = true;
     public string TextColor { get; set; } = "auto"; // auto | light | dark
     public string AutoHide { get; set; } = "fullscreen"; // never | fullscreen (a maximized or full-screen app in front) | always
     public string StatusStyle { get; set; } = "ring"; // ring | icons (network, volume, battery as on the Windows taskbar)
-    public string DockDisplayMode { get; set; } = "follow"; // one Dock: follow | primary | fixed
+    public string DockDisplayMode { get; set; } = "primary"; // primary | follow | fixed | all
     public double DockDisplayDelay { get; set; } = 450; // milliseconds at another display's bottom edge
     public string DockDisplay { get; set; } = "";
     public string DesktopDisplay { get; set; } = ""; // empty follows the system primary
@@ -66,6 +69,7 @@ internal sealed class BarSettings
     public bool StageManager { get; set; }             // the app in front on the stage, the others in a strip at the side
     public bool StageOnRight { get; set; }             // the strip's side; left by default (the widgets take the other side)
     public bool StageAutoHide { get; set; }            // the strip only comes out while the pointer rests on its edge
+    public bool StageMinimize { get; set; }            // a window minimized on the stage goes to the strip (off unless chosen)
     public string WidgetMaterial { get; set; } = "glass"; // glass (the bar's) | dusk (dimmed glass, white ink) | color (their own faces)
     public bool HideTaskbar { get; set; }              // the system taskbar is hidden while Atrium runs
     public bool HideBanners { get; set; }              // Do Not Disturb: no system banners, notifications still become cards
@@ -126,6 +130,8 @@ internal sealed class BarSettings
             ["hoverRise"] = HoverRise,
             ["showClock"] = ShowClock,
             ["showTray"] = ShowTray,
+            ["startTray"] = StartTray,
+            ["startStatus"] = StartStatus,
             ["showStatus"] = ShowStatus,
             ["showNotifications"] = ShowNotifications,
             ["autoWidth"] = AutoWidth,
@@ -152,6 +158,7 @@ internal sealed class BarSettings
             ["stageManager"] = StageManager,
             ["stageOnRight"] = StageOnRight,
             ["stageAutoHide"] = StageAutoHide,
+            ["stageMinimize"] = StageMinimize,
             ["widgetMaterial"] = WidgetMaterial,
             ["hideTaskbar"] = HideTaskbar,
             ["hideBanners"] = HideBanners,
@@ -159,6 +166,8 @@ internal sealed class BarSettings
             ["winNumbers"] = WinNumbers,
             ["startOnLogin"] = StartOnLogin,
         };
+        if (StartSize.Length > 0)
+            o["startSize"] = StartSize;
         if (Pins != null)
         {
             var a = new JsonArray();
@@ -201,6 +210,9 @@ internal sealed class BarSettings
         s.HoverRise = Flag("hoverRise", f.HoverRise);
         s.ShowClock = Flag("showClock", f.ShowClock);
         s.ShowTray = Flag("showTray", f.ShowTray);
+        s.StartTray = Flag("startTray", f.StartTray);
+        s.StartStatus = Flag("startStatus", f.StartStatus);
+        s.StartSize = o?["startSize"] is JsonValue ss0 && ss0.TryGetValue(out string? size) && size is "small" or "medium" or "large" ? size! : f.StartSize;
         s.ShowStatus = Flag("showStatus", f.ShowStatus);
         s.ShowNotifications = Flag("showNotifications", f.ShowNotifications);
         s.AutoWidth = Flag("autoWidth", f.AutoWidth);
@@ -221,6 +233,7 @@ internal sealed class BarSettings
         s.StageManager = Flag("stageManager", f.StageManager);
         s.StageOnRight = Flag("stageOnRight", f.StageOnRight);
         s.StageAutoHide = Flag("stageAutoHide", f.StageAutoHide);
+        s.StageMinimize = Flag("stageMinimize", f.StageMinimize);
         s.WidgetMaterial = o?["widgetMaterial"] is JsonValue wm && wm.TryGetValue(out string? wms) && wms is "dusk" or "color" or "glass"
             ? wms : f.WidgetMaterial;
         s.HideTaskbar = Flag("hideTaskbar", f.HideTaskbar);
@@ -230,7 +243,7 @@ internal sealed class BarSettings
         s.StartOnLogin = Flag("startOnLogin", f.StartOnLogin);
         string Display(string key, string value) => o?[key] is JsonValue v && v.TryGetValue(out string? text) && text != null ? text : value;
         string mode = Display("dockDisplayMode", f.DockDisplayMode);
-        s.DockDisplayMode = mode is "primary" or "fixed" or "all" ? mode : "follow";
+        s.DockDisplayMode = mode is "follow" or "fixed" or "all" ? mode : "primary";
         s.DockDisplayDelay = Math.Clamp(Num("dockDisplayDelay", f.DockDisplayDelay), 100, 2000);
         s.DockDisplay = Display("dockDisplay", f.DockDisplay);
         s.DesktopDisplay = Display("desktopDisplay", f.DesktopDisplay);
@@ -267,11 +280,11 @@ internal sealed class BarSettings
     public bool SameAs(BarSettings o) =>
         SameMaterial(o) && Preset == o.Preset && CornerRadius == o.CornerRadius && Width == o.Width && Height == o.Height &&
         Margin == o.Margin && IconSize == o.IconSize && Magnify == o.Magnify && HoverRise == o.HoverRise && AutoWidth == o.AutoWidth && ShowClock == o.ShowClock &&
-        ShowTray == o.ShowTray && ShowStatus == o.ShowStatus && ShowNotifications == o.ShowNotifications &&
+        ShowTray == o.ShowTray && StartTray == o.StartTray && StartStatus == o.StartStatus && StartSize == o.StartSize && ShowStatus == o.ShowStatus && ShowNotifications == o.ShowNotifications &&
         ShowRunning == o.ShowRunning && TextColor == o.TextColor && AutoHide == o.AutoHide && StatusStyle == o.StatusStyle && NotifyTimeout == o.NotifyTimeout && NotifyHideBody == o.NotifyHideBody &&
         NotifyListener == o.NotifyListener && NotifyWeChat == o.NotifyWeChat && NotifyFeishu == o.NotifyFeishu && Bar == o.Bar && Widgets == o.Widgets &&
         WidgetsOnRight == o.WidgetsOnRight && WidgetBackdrop == o.WidgetBackdrop && StageManager == o.StageManager && StageOnRight == o.StageOnRight &&
-        StageAutoHide == o.StageAutoHide && WidgetMaterial == o.WidgetMaterial &&
+        StageAutoHide == o.StageAutoHide && StageMinimize == o.StageMinimize && WidgetMaterial == o.WidgetMaterial &&
         HideTaskbar == o.HideTaskbar && HideBanners == o.HideBanners && WinKeyStart == o.WinKeyStart && WinNumbers == o.WinNumbers &&
         StartOnLogin == o.StartOnLogin &&
         DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
