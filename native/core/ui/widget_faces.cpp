@@ -50,13 +50,6 @@ const wchar_t* const kWeekShort[] = {L"一", L"二", L"三", L"四", L"五", L"�
 const wchar_t* const kMonths[] = {L"一月", L"二月", L"三月", L"四月", L"五月", L"六月",
                                   L"七月", L"八月", L"九月", L"十月", L"十一月", L"十二月"};
 
-// The world clock's cities (macOS shows four in a medium Clock widget).
-struct City {
-    const wchar_t* name;
-    const wchar_t* zone;
-};
-const City kCities[] = {{L"北京", L"China Standard Time"}, {L"东京", L"Tokyo Standard Time"}, {L"伦敦", L"GMT Standard Time"}, {L"纽约", L"Eastern Standard Time"}};
-
 bool ZoneInfo(const wchar_t* key, DYNAMIC_TIME_ZONE_INFORMATION& out)
 {
     static std::map<std::wstring, DYNAMIC_TIME_ZONE_INFORMATION> zones; // read once
@@ -79,20 +72,63 @@ int64_t Minutes(const SYSTEMTIME& t)
     return int64_t((ULARGE_INTEGER{f.dwLowDateTime, f.dwHighDateTime}.QuadPart) / 600000000ULL);
 }
 
-// The time in a city, and how far it is from here: "今天 +1小时".
-SYSTEMTIME CityTime(const City& city, const SYSTEMTIME& now, std::wstring& when)
+// The time in a city, and how far it is from here: "今天 +1小时" (half hours as "+5.5小时").
+SYSTEMTIME CityTime(const std::wstring& name, const SYSTEMTIME& now, std::wstring& when)
 {
     SYSTEMTIME utc, ct = now;
     GetSystemTime(&utc);
     DYNAMIC_TIME_ZONE_INFORMATION z{};
-    if (ZoneInfo(city.zone, z))
-        SystemTimeToTzSpecificLocalTimeEx(&z, &utc, &ct);
-    int64_t diff = (Minutes(ct) - Minutes(now)) / 60;
+    for (const WorldCity& city : WorldCities())
+        if (name == city.name && ZoneInfo(city.zone, z))
+            SystemTimeToTzSpecificLocalTimeEx(&z, &utc, &ct);
+    const int64_t minutes = Minutes(ct) - Minutes(now);
+    // Minutes() floors the seconds: a quarter-hour zone may come out a minute short.
+    const int64_t quarters = (minutes + (minutes >= 0 ? 7 : -7)) / 15;
     int dayDiff = int((Minutes(ct) / 1440) - (Minutes(now) / 1440));
     when = dayDiff > 0 ? L"明天" : dayDiff < 0 ? L"昨天" : L"今天";
-    when += (diff >= 0 ? L" +" : L" ") + std::to_wstring(diff) + L"小时";
+    std::wstring hours = std::to_wstring(quarters / 4);
+    if (quarters % 4) {
+        wchar_t b[16];
+        swprintf_s(b, L"%g", double(quarters) / 4);
+        hours = b;
+    }
+    when += (quarters >= 0 ? L" +" : L" ") + hours + L"小时";
     return ct;
 }
+
+} // namespace
+
+const std::vector<WorldCity>& WorldCities()
+{
+    static const std::vector<WorldCity> cities = {
+        {L"北京", L"China Standard Time"},          {L"上海", L"China Standard Time"},        {L"香港", L"China Standard Time"},
+        {L"台北", L"Taipei Standard Time"},         {L"东京", L"Tokyo Standard Time"},        {L"首尔", L"Korea Standard Time"},
+        {L"新加坡", L"Singapore Standard Time"},    {L"曼谷", L"SE Asia Standard Time"},      {L"新德里", L"India Standard Time"},
+        {L"迪拜", L"Arabian Standard Time"},        {L"莫斯科", L"Russian Standard Time"},    {L"伊斯坦布尔", L"Turkey Standard Time"},
+        {L"开罗", L"Egypt Standard Time"},          {L"约翰内斯堡", L"South Africa Standard Time"}, {L"柏林", L"W. Europe Standard Time"},
+        {L"巴黎", L"Romance Standard Time"},        {L"伦敦", L"GMT Standard Time"},          {L"圣保罗", L"E. South America Standard Time"},
+        {L"纽约", L"Eastern Standard Time"},        {L"多伦多", L"Eastern Standard Time"},    {L"芝加哥", L"Central Standard Time"},
+        {L"丹佛", L"Mountain Standard Time"},       {L"洛杉矶", L"Pacific Standard Time"},    {L"温哥华", L"Pacific Standard Time"},
+        {L"安克雷奇", L"Alaskan Standard Time"},    {L"檀香山", L"Hawaiian Standard Time"},   {L"悉尼", L"AUS Eastern Standard Time"},
+        {L"墨尔本", L"AUS Eastern Standard Time"},  {L"奥克兰", L"New Zealand Standard Time"},
+    };
+    return cities;
+}
+
+bool HasWorldClocks(WidgetKind kind, WidgetSize size) { return size != WidgetSize::Small && (kind == WidgetKind::Clock || kind == WidgetKind::Digital); }
+
+std::vector<std::wstring> WidgetCities(WidgetKind kind, const std::vector<std::wstring>& chosen)
+{
+    // macOS's medium Clock shows four cities; the digital one lists three beside the local time.
+    std::vector<std::wstring> cities = kind == WidgetKind::Digital ? std::vector<std::wstring>{L"东京", L"伦敦", L"纽约"}
+                                                                  : std::vector<std::wstring>{L"北京", L"东京", L"伦敦", L"纽约"};
+    for (size_t i = 0; i < cities.size() && i < chosen.size(); ++i)
+        if (std::any_of(WorldCities().begin(), WorldCities().end(), [&](const WorldCity& c) { return chosen[i] == c.name; }))
+            cities[i] = chosen[i];
+    return cities;
+}
+
+namespace {
 
 std::wstring HourMinute(const SYSTEMTIME& t)
 {
@@ -150,7 +186,7 @@ void ClockFace(Canvas& c, float cx, float cy, float R, const SYSTEMTIME& t, cons
 
 constexpr float kPad = 14;
 
-void PaintClock(Canvas& c, WidgetSize size, const WidgetWorld& w, const Pal& p, float W, float H)
+void PaintClock(Canvas& c, WidgetSize size, const WidgetContent& content, const WidgetWorld& w, const Pal& p, float W, float H)
 {
     if (size == WidgetSize::Small) {
         ClockFace(c, W / 2, H / 2, H / 2 - 9, w.now, p, p.face, p.text, true, w.city, p.sub);
@@ -158,21 +194,22 @@ void PaintClock(Canvas& c, WidgetSize size, const WidgetWorld& w, const Pal& p, 
     }
     // The world clock: four faces, dark where it is night.
     const float colW = (W - 2 * kPad) / 4, R = 31;
+    const std::vector<std::wstring> cities = WidgetCities(WidgetKind::Clock, content.cities);
     for (int i = 0; i < 4; ++i) {
         std::wstring when;
-        SYSTEMTIME ct = CityTime(kCities[i], w.now, when);
+        SYSTEMTIME ct = CityTime(cities[size_t(i)], w.now, when);
         bool night = ct.wHour < 6 || ct.wHour >= 18;
         float cx = kPad + colW * (float(i) + 0.5f), cy = (H - 2 * R - 42) / 2 + R - 2;
         D2D1_COLOR_F face = night ? p.nightFace : p.face, ink = night ? Rgba(0xFFFFFF, 0.96f) : p.text;
         ClockFace(c, cx, cy, R, ct, p, face, ink, false, {}, ink);
-        c.Text(kCities[i].name, D2D1::RectF(cx - colW / 2, cy + R + 8, cx + colW / 2, cy + R + 26), 12.5f, p.text, DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
+        c.Text(cities[size_t(i)], D2D1::RectF(cx - colW / 2, cy + R + 8, cx + colW / 2, cy + R + 26), 12.5f, p.text, DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
         c.Text(when, D2D1::RectF(cx - colW / 2, cy + R + 26, cx + colW / 2, cy + R + 42), 10.5f, p.sub, DWRITE_FONT_WEIGHT_NORMAL, 1);
     }
 }
 
 // Digits instead of hands: the time large, the day under it; the medium one
 // lists three more cities on the right.
-void PaintDigital(Canvas& c, WidgetSize size, const WidgetWorld& w, const Pal& p, float W, float H)
+void PaintDigital(Canvas& c, WidgetSize size, const WidgetContent& content, const WidgetWorld& w, const Pal& p, float W, float H)
 {
     const int wd = Weekday(w.now.wYear, w.now.wMonth, w.now.wDay);
     const float leftW = size == WidgetSize::Small ? W - 2 * kPad : 150;
@@ -189,13 +226,14 @@ void PaintDigital(Canvas& c, WidgetSize size, const WidgetWorld& w, const Pal& p
     if (size == WidgetSize::Small)
         return;
     const float x0 = kPad + leftW + 8, rowH = (H - 2 * kPad) / 3;
-    for (int i = 1; i < 4; ++i) {
+    const std::vector<std::wstring> cities = WidgetCities(WidgetKind::Digital, content.cities);
+    for (int i = 0; i < 3; ++i) {
         std::wstring when;
-        SYSTEMTIME ct = CityTime(kCities[i], w.now, when);
-        float y = kPad + rowH * float(i - 1);
-        if (i > 1)
+        SYSTEMTIME ct = CityTime(cities[size_t(i)], w.now, when);
+        float y = kPad + rowH * float(i);
+        if (i > 0)
             c.Line(x0, y, W - kPad, y, Alpha(p.text, 0.12f));
-        c.Text(kCities[i].name, D2D1::RectF(x0, y + 4, W - kPad - 70, y + rowH / 2 + 2), 13, p.text, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        c.Text(cities[size_t(i)], D2D1::RectF(x0, y + 4, W - kPad - 70, y + rowH / 2 + 2), 13, p.text, DWRITE_FONT_WEIGHT_SEMI_BOLD);
         c.Text(when, D2D1::RectF(x0, y + rowH / 2, W - kPad - 70, y + rowH - 4), 10.5f, p.sub);
         c.Text(HourMinute(ct), D2D1::RectF(W - kPad - 80, y, W - kPad, y + rowH), 22, p.text, DWRITE_FONT_WEIGHT_SEMI_BOLD, 2);
     }
@@ -801,10 +839,10 @@ void PaintWidget(Canvas& c, WidgetKind kind, WidgetSize size, WidgetMaterial mat
     hits.clear();
     switch (kind) {
     case WidgetKind::Clock:
-        PaintClock(c, size, world, p, W, H);
+        PaintClock(c, size, content, world, p, W, H);
         break;
     case WidgetKind::Digital:
-        PaintDigital(c, size, world, p, W, H);
+        PaintDigital(c, size, content, world, p, W, H);
         break;
     case WidgetKind::Calendar:
         PaintCalendar(c, size, world, p, W, H);

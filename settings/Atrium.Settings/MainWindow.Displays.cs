@@ -39,13 +39,14 @@ public sealed partial class MainWindow
         DesktopDisplayPicker.SelectedItem = choices.First(d => d.Id == _current.DesktopDisplay);
         DisplayFallback.Text = new[] { _current.DockDisplayMode == "fixed" ? _current.DockDisplay : "", _current.DesktopDisplay }
             .Any(id => id.Length > 0 && !_displays.Any(d => d.Id == id))
-            ? "所选显示器已断开，当前使用主屏；重新连接后会自动恢复。" : "显示器断开时自动回到主屏，保留选择供重新连接后恢复。";
+            ? "所选显示器已断开，当前使用主屏；重新连接后会自动恢复。" : "";
+        DisplayFallback.Visibility = DisplayFallback.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         _loading = loading;
     }
 
     private void LoadDisplayControls()
     {
-        (_current.DockDisplayMode switch { "primary" => DockDisplayPrimary, "fixed" => DockDisplayFixed, "all" => DockDisplayAll, _ => DockDisplayFollow }).IsChecked = true;
+        (_current.DockDisplayMode switch { "follow" => DockDisplayFollow, "fixed" => DockDisplayFixed, "all" => DockDisplayAll, _ => DockDisplayPrimary }).IsChecked = true;
         DisplayDelay.SetValue(_current.DockDisplayDelay);
         TaskbarAppsPicker.SelectedIndex = _current.TaskbarApps switch { "primaryAndWindow" => 1, "window" => 2, _ => 0 };
         TaskbarRightPrimaryOnlySwitch.IsOn = _current.TaskbarRightPrimaryOnly;

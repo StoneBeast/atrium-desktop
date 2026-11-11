@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <thread>
 #include <utility>
 
@@ -49,6 +50,21 @@ std::vector<uint8_t> Shrink(const uint8_t* src, int sw, int sh, int stride, int 
         out[i * 4 + 3] = 255;
     }
     return out;
+}
+
+// All but a few of `src`'s pixels (w x h BGRA) are of the colour in its middle.
+bool Blank(const uint8_t* src, int w, int h, int stride)
+{
+    const uint8_t* mid = src + size_t(h / 2) * stride + size_t(w / 2) * 4;
+    int all = 0, same = 0;
+    for (int y = 0; y < h; y += 4)
+        for (int x = 0; x < w; x += 4) {
+            const uint8_t* p = src + size_t(y) * stride + size_t(x) * 4;
+            ++all;
+            if (std::abs(p[0] - mid[0]) <= 6 && std::abs(p[1] - mid[1]) <= 6 && std::abs(p[2] - mid[2]) <= 6)
+                ++same;
+        }
+    return same >= all - all / 200;
 }
 
 } // namespace
@@ -140,17 +156,9 @@ WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius)
                   std::min<LONG>(wh, frame.bottom - win.top)};
         const int pw = part.right - part.left, ph = part.bottom - part.top;
         const uint8_t* src = static_cast<const uint8_t*>(bits) + (size_t(part.top) * ww + part.left) * 4;
-        // Nothing at all came (some windows cannot be printed): no picture.
-        bool any = false;
-        for (int y = 0; y < ph && !any; y += 7)
-            for (int x = 0; x < pw; x += 5) {
-                const uint8_t* p = src + (size_t(y) * ww + x) * 4;
-                if (p[0] | p[1] | p[2]) {
-                    any = true;
-                    break;
-                }
-            }
-        if (any && pw > 0 && ph > 0) {
+        // Nothing came (some windows cannot be printed), or one plain colour (a window that has not
+        // drawn itself yet): no picture.
+        if (pw > 0 && ph > 0 && !Blank(src, pw, ph, ww * 4)) {
             const float f = std::min({1.f, float(maxWidth) / float(pw), float(maxHeight) / float(ph)});
             const int tw = std::max(1, int(std::lround(pw * f))), th = std::max(1, int(std::lround(ph * f)));
             result = Finish(Shrink(src, pw, ph, ww * 4, tw, th), tw, th, radius);

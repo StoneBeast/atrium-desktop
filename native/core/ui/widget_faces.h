@@ -32,6 +32,17 @@ inline float WidgetWidth(WidgetSize s) { return float(WidgetCols(s)) * kWidgetCe
 inline float WidgetHeight(WidgetSize s) { return float(WidgetRows(s)) * kWidgetCell + float(WidgetRows(s) - 1) * kWidgetGap; }
 bool WidgetSupports(WidgetKind kind, WidgetSize size);
 
+// The cities a world clock can show, each with its Windows time zone.
+struct WorldCity {
+    const wchar_t* name;
+    const wchar_t* zone;
+};
+const std::vector<WorldCity>& WorldCities();
+// The world clocks of a widget (the medium Clock shows four, the medium Digital three): its own
+// choice where it made one, else the defaults.
+bool HasWorldClocks(WidgetKind kind, WidgetSize size);
+std::vector<std::wstring> WidgetCities(WidgetKind kind, const std::vector<std::wstring>& chosen);
+
 struct Reminder {
     std::wstring text;
     bool done = false;
@@ -42,6 +53,7 @@ struct WidgetContent {
     std::wstring text;           // notes
     std::vector<Reminder> items; // reminders
     std::wstring folder;         // photos: the folder (empty: Pictures)
+    std::vector<std::wstring> cities; // world clocks: their cities (WorldCities' names; empty: the defaults)
     std::wstring photo;          // the photo shown
     std::shared_ptr<const IconImage> image; // it, cropped and scaled to the widget
     std::wstring imageKey;       // the canvas's cache key of `image`

@@ -11,7 +11,8 @@
 // below a revealed system taskbar. While the top app on this monitor is maximized
 // or full screen, the bar slides off screen and comes up again while the
 // pointer is at the screen's bottom edge below it (auto-hide; setting autoHide
-// can keep it up always, or hide it whatever is in front).
+// can keep it up always, or hide it whatever is in front). Not over an app in
+// front that fills the whole screen (a game): as Windows' taskbar, it stays down.
 // The render thread also draws the glass layer of Atrium's popups.
 #pragma once
 
@@ -162,6 +163,7 @@ private:
     void UpdateAutoHide(); // tucks the bar away or brings it up
     void WatchPointer();   // while covered: the screen's bottom edge brings the bar up, leaving it lets it go
     void WatchDisplays();  // summon the shared Dock on another display, after the hover delay
+    void WatchDisplaysIfNeeded(); // its timer, in the follow mode with several displays
     void Raise();
 
     bool debugCapturable_ = false;
@@ -177,6 +179,7 @@ private:
     std::vector<TaskItem> allItems_; // unfiltered task model, shared by every display
     bool filterTasks_ = false;
     bool layoutPending_ = false; // coalesce window-move events
+    bool coverPending_ = false; // a look at what covers the monitor is due (kCoverTimer)
     std::map<std::wstring, CachedIcon> icons_;
     uint64_t nextIconId_ = 1;
     BarScene scene_;

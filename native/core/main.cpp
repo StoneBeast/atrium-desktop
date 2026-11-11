@@ -69,7 +69,7 @@ constexpr UINT kStatusMs = 3000;
 constexpr UINT kTrayId = 1;
 
 enum Command : UINT {
-    kCmdSettings = 100, kCmdToggle, kCmdExit, kCmdNewWindow, kCmdPin, kCmdUnpin, kCmdClose, kCmdOpenLocation, kCmdDesktop, kCmdTaskManager, kCmdTerminate,
+    kCmdSettings = 100, kCmdToggle, kCmdExit, kCmdNewWindow, kCmdPin, kCmdUnpin, kCmdClose, kCmdOpenLocation, kCmdDesktop, kCmdTaskManager, kCmdTerminate, kCmdTerminateConfirm,
     kCmdWidgets, kCmdStage, kCmdWidgetsModule
 };
 
@@ -507,6 +507,9 @@ void ApplySettings(const Settings& s)
     g_app.calendar->SetRadius(radius);
     g_app.calendar->SetBarHeight(float(s.height));
     g_app.start->SetBarHeight(float(s.height)); // its status capsule is shaped like the bar
+    g_app.start->SetShowTray(s.startTray);
+    g_app.start->SetShowStatus(s.startStatus);
+    g_app.start->SetPreferredSize(s.startSize);
     g_app.notes->SetRadius(radius);
     g_app.notes->SetOptions(s.notifyTimeout, s.notifyHideBody, s.notifyPlacement);
     // Notification cards belong to the bar (its bell): without it, Windows shows its own banners.
@@ -548,6 +551,7 @@ void ApplySettings(const Settings& s)
     g_app.stage->SetMonitor(desktop);
     g_app.stage->SetOnRight(s.stageOnRight);
     g_app.stage->SetAutoHide(s.stageAutoHide);
+    g_app.stage->SetMinimizeToStrip(s.stageMinimize);
     g_app.stage->SetEnabled(s.stageManager);
     g_app.control->SetStage(s.stageManager, s.stageOnRight);
     g_app.widgets->SetMaterial(s.widgetMaterial == L"dusk" ? WidgetMaterial::Dusk : s.widgetMaterial == L"color" ? WidgetMaterial::Color : WidgetMaterial::Glass);
@@ -662,7 +666,8 @@ void ShowItemMenu(const std::wstring& key, POINT pt)
     entries.push_back({L"关闭程序", kCmdTerminate, false, !g_app.tasks->CanTerminate(key)});
     int pinIndex = it->pinIndex;
     auto windows = it->windows;
-    g_app.menu->Open(std::move(entries), pt, MenuPlace::AboveCentered, [key, location, pinIndex, windows](int cmd) {
+    std::wstring name = it->name;
+    g_app.menu->Open(std::move(entries), pt, MenuPlace::AboveCentered, [key, location, pinIndex, windows, name, pt](int cmd) {
         switch (cmd) {
         case kCmdNewWindow:
             g_app.tasks->Launch(key);
@@ -688,9 +693,18 @@ void ShowItemMenu(const std::wstring& key, POINT pt)
             for (HWND window : windows)
                 TaskModel::CloseWindow(window);
             break;
-        case kCmdTerminate:
-            g_app.tasks->Terminate(key);
+        case kCmdTerminate: {
+            // Ending the processes loses what is not saved: asked once more, in place.
+            std::vector<MenuEntry> confirm = {{L"强制关闭“" + name + L"”？未保存的内容会丢失", 0, false, false, true},
+                                              {L"", 0},
+                                              {L"强制关闭", kCmdTerminateConfirm},
+                                              {L"取消", 0}};
+            g_app.menu->Open(std::move(confirm), pt, MenuPlace::AboveCentered, [key](int answer) {
+                if (answer == kCmdTerminateConfirm)
+                    g_app.tasks->Terminate(key);
+            });
             break;
+        }
         case kCmdOpenLocation:
             if (PIDLIST_ABSOLUTE id = ILCreateFromPathW(location.c_str())) {
                 SHOpenFolderAndSelectItems(id, 0, nullptr, 0);
@@ -1112,6 +1126,12 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
 {
+    // Never in the install folder (started from it in Explorer, or by the updater): the apps started
+    // from the bar would inherit it, and a folder some process is in cannot be replaced by an update.
+    if (PWSTR profile = nullptr; SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &profile))) {
+        SetCurrentDirectoryW(profile);
+        CoTaskMemFree(profile);
+    }
     int argumentCount = 0;
     auto startupArguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     for (int i = 1; startupArguments && i + 1 < argumentCount; ++i)
@@ -1280,6 +1300,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     ApplySettings(settings);
     g_app.bar->SetItems(g_app.tasks->Snapshot());
     g_app.server = std::make_unique<SettingsServer>(g_app.host, settings);
+    // The start menu's size is a setting (the settings show it); kept in start.json before.
+    g_app.start->onSize = [](const std::wstring& name) { g_app.server->Modify([&](Settings& s) { s.startSize = name; }); };
+    if (settings.startSize.empty())
+        g_app.start->onSize(g_app.start->SizeName());
     // The start menu shows the Windows start menu's pins; from there an app
     // can be pinned to the bar (the bar's own pins are separate).
     g_app.start->onPin = [](const PinnedApp& pin) {

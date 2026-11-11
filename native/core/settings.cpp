@@ -49,8 +49,10 @@ void Settings::Clamp()
         autoHide = L"fullscreen";
     if (statusStyle != L"icons")
         statusStyle = L"ring";
-    if (dockDisplayMode != L"primary" && dockDisplayMode != L"fixed" && dockDisplayMode != L"all")
-        dockDisplayMode = L"follow";
+    if (startSize != L"small" && startSize != L"medium" && startSize != L"large")
+        startSize.clear();
+    if (dockDisplayMode != L"follow" && dockDisplayMode != L"fixed" && dockDisplayMode != L"all")
+        dockDisplayMode = L"primary";
     if (taskbarApps != L"primaryAndWindow" && taskbarApps != L"window")
         taskbarApps = L"all";
     if (notifyPlacement != L"topRight")
@@ -84,6 +86,10 @@ std::wstring Settings::ToJson() const
     num(L"iconSize", iconSize);
     num(L"magnify", magnify);
     o.SetNamedValue(L"hoverRise", json::JsonValue::CreateBooleanValue(hoverRise));
+    o.SetNamedValue(L"startTray", json::JsonValue::CreateBooleanValue(startTray));
+    o.SetNamedValue(L"startStatus", json::JsonValue::CreateBooleanValue(startStatus));
+    if (!startSize.empty())
+        o.SetNamedValue(L"startSize", json::JsonValue::CreateStringValue(startSize));
     o.SetNamedValue(L"showClock", json::JsonValue::CreateBooleanValue(showClock));
     o.SetNamedValue(L"showTray", json::JsonValue::CreateBooleanValue(showTray));
     o.SetNamedValue(L"showStatus", json::JsonValue::CreateBooleanValue(showStatus));
@@ -113,6 +119,7 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"stageManager", json::JsonValue::CreateBooleanValue(stageManager));
     o.SetNamedValue(L"stageOnRight", json::JsonValue::CreateBooleanValue(stageOnRight));
     o.SetNamedValue(L"stageAutoHide", json::JsonValue::CreateBooleanValue(stageAutoHide));
+    o.SetNamedValue(L"stageMinimize", json::JsonValue::CreateBooleanValue(stageMinimize));
     o.SetNamedValue(L"hideTaskbar", json::JsonValue::CreateBooleanValue(hideTaskbar));
     o.SetNamedValue(L"hideBanners", json::JsonValue::CreateBooleanValue(hideBanners));
     o.SetNamedValue(L"winKeyStart", json::JsonValue::CreateBooleanValue(winKeyStart));
@@ -170,6 +177,10 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
             v = o.GetNamedBoolean(k);
     };
     flag(L"hoverRise", s.hoverRise);
+    flag(L"startTray", s.startTray);
+    flag(L"startStatus", s.startStatus);
+    if (o.HasKey(L"startSize") && o.GetNamedValue(L"startSize").ValueType() == json::JsonValueType::String)
+        s.startSize = std::wstring(o.GetNamedString(L"startSize"));
     flag(L"showClock", s.showClock);
     flag(L"showTray", s.showTray);
     flag(L"showStatus", s.showStatus);
@@ -191,6 +202,7 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     flag(L"stageManager", s.stageManager);
     flag(L"stageOnRight", s.stageOnRight);
     flag(L"stageAutoHide", s.stageAutoHide);
+    flag(L"stageMinimize", s.stageMinimize);
     flag(L"hideTaskbar", s.hideTaskbar);
     flag(L"hideBanners", s.hideBanners);
     flag(L"winKeyStart", s.winKeyStart);

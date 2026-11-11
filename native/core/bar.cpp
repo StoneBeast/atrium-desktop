@@ -59,6 +59,8 @@ constexpr UINT kGuardFastMs = 150; // while below a system taskbar the user is u
 constexpr UINT_PTR kSlideTimer = 4;   // the slide out is over: hide the windows
 constexpr UINT_PTR kPointerTimer = 5; // while covered: watch the pointer
 constexpr UINT_PTR kDisplayTimer = 6; // the shared Dock's cross-display gesture
+constexpr UINT_PTR kCoverTimer = 7;   // windows moved on this monitor: look at what covers it, once for a burst
+constexpr UINT kCoverMs = 50;
 constexpr UINT kPointerMs = 50;
 constexpr DWORD kLeaveMs = 500;       // a revealed bar goes down this long after the pointer left it
 
@@ -499,6 +501,12 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
             WatchDisplays();
             return 0;
         }
+        if (w == kCoverTimer) {
+            KillTimer(h, kCoverTimer);
+            coverPending_ = false;
+            UpdateCover();
+            return 0;
+        }
         if (w == kTooltipTimer) {
             KillTimer(h, kTooltipTimer);
             if (pressed_.empty() && !dragging_)
@@ -749,17 +757,24 @@ void Bar::Apply(const Settings& s)
     if (changed)
         activeDisplay_.clear();
     summonMonitor_ = nullptr;
-    if (s.dockDisplayMode == L"follow" && displayOverride_.empty())
+    WatchDisplaysIfNeeded();
+    Relayout();
+    UpdateCover(); // the hide mode may have changed
+}
+
+// Watching the pointer for the follow mode only with another display to follow it to.
+void Bar::WatchDisplaysIfNeeded()
+{
+    if (settings_.dockDisplayMode == L"follow" && displayOverride_.empty() && displays_.size() > 1)
         SetTimer(input_, kDisplayTimer, kPointerMs, nullptr);
     else
         KillTimer(input_, kDisplayTimer);
-    Relayout();
-    UpdateCover(); // the hide mode may have changed
 }
 
 void Bar::RefreshDisplays()
 {
     displays_ = ConnectedDisplays();
+    WatchDisplaysIfNeeded();
     ++displayGeneration_; // HMONITOR can be reused after a mode or adapter change.
     summonMonitor_ = nullptr;
     if (dragging_)
@@ -1222,8 +1237,12 @@ void CALLBACK Bar::WinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idO
                 PostMessageW(bar->input_, WM_BAR_LAYOUT, 0, 0);
             }
         }
-        if (hwnd == GetForegroundWindow() || MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == bar->hmonitor_)
-            bar->UpdateCover();
+        // Windows move many times a second while dragged: the windows of the monitor are walked
+        // once for each burst, not for every step.
+        if ((hwnd == GetForegroundWindow() || MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == bar->hmonitor_) && !bar->coverPending_) {
+            bar->coverPending_ = true;
+            SetTimer(bar->input_, kCoverTimer, kCoverMs, nullptr);
+        }
         return;
     }
     if (bar->settings_.taskbarApps != L"all")
@@ -1259,8 +1278,12 @@ bool Bar::MonitorCoveredByApp() const
         RECT frame{};
         if (!GetWindowRect(window, &frame))
             continue;
-        if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_))
+        if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_)) {
+            // A small window kept above the others (a call's or lyrics' float) does not decide.
+            if (!*covered && (ex & WS_EX_TOPMOST))
+                continue;
             return *covered; // a normal app in front of a full-screen one restores the bar
+        }
     }
     return false;
 }
@@ -1277,7 +1300,7 @@ void Bar::UpdateCover()
     POINT p{};
     GetCursorPos(&p);
     RECT bar = BarRect(), zone{bar.left, window_.top, bar.right, monitor_.bottom};
-    revealed_ = covered && !slidOut_ && PtInRect(&zone, p);
+    revealed_ = covered && !slidOut_ && PtInRect(&zone, p) && !FullScreenInFront(hmonitor_);
     leftAt_ = 0;
     if (mode == L"fullscreen")
         Log(L"bar: monitor %p %s", hmonitor_, covered ? L"covered by its top app: auto-hide" : L"not covered by its top app");
@@ -1326,7 +1349,7 @@ void Bar::WatchPointer()
     RECT bar = BarRect();
     if (!revealed_) {
         // The bottom edge of the screen, below the bar.
-        if (AtDisplayBottom(p, monitor_) && p.x >= bar.left && p.x < bar.right) {
+        if (AtDisplayBottom(p, monitor_) && p.x >= bar.left && p.x < bar.right && !FullScreenInFront(hmonitor_)) {
             revealed_ = true;
             leftAt_ = 0;
             UpdateAutoHide();

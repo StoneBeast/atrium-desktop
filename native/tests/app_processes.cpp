@@ -106,8 +106,9 @@ void CheckTermination(const fs::path& self)
 
     Fixture fixture;
     const auto app = fixture.Copy(self, L"app", L"probe.exe");
-    const auto helper = fixture.Copy(self, L"helper", L"helper.exe");
-    const auto grandchild = fixture.Copy(self, L"grandchild", L"background.exe");
+    // The app starts a helper from its own folder, which starts another program from elsewhere.
+    const auto helper = fixture.Copy(self, L"app\\bin", L"helper.exe");
+    const auto grandchild = fixture.Copy(self, L"game", L"background.exe");
     const auto unrelated = fixture.Copy(self, L"unrelated", L"probe.exe");
     const auto shell = fixture.Copy(self, L"shell", L"explorer.exe");
     const auto eventName = L"Local\\AtriumProcessTests-" + std::to_wstring(GetCurrentProcessId());
@@ -126,8 +127,9 @@ void CheckTermination(const fs::path& self)
     CharUpperBuffW(upperPath.data(), DWORD(upperPath.size()));
     const AppProcessIdentity target{upperPath, {}};
     Require(TerminateAppProcesses({&target, 1}), "end application and background processes");
-    for (size_t i = 0; i < 4; ++i)
-        Require(WaitForSingleObject(fixture.children[i].get(), 5000) == WAIT_OBJECT_0, "app, helper, grandchild and background instance exit");
+    for (size_t i : {0, 1, 3})
+        Require(WaitForSingleObject(fixture.children[i].get(), 5000) == WAIT_OBJECT_0, "app, its helper and background instance exit");
+    Require(WaitForSingleObject(fixture.children[2].get(), 0) == WAIT_TIMEOUT, "a program the app started from elsewhere stays alive");
     Require(WaitForSingleObject(fixture.children[4].get(), 0) == WAIT_TIMEOUT, "same filename in another directory stays alive");
 
     const AppProcessIdentity shellTarget{shell.wstring(), {}};

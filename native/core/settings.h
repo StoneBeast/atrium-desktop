@@ -34,7 +34,10 @@ struct Settings {
     double margin = 10;              // gap above the bottom of the work area
     double iconSize = 30;
     double magnify = 1.7;            // dock magnification under the pointer: icon scale, 1 = off
-    bool hoverRise = true;           // glass rises with the pointer's magnification wave
+    bool startTray = true;           // the tray's button in the start menu's capsule
+    bool startStatus = true;         // the network, volume and battery buttons there
+    std::wstring startSize;          // the start menu's: small | medium | large; empty: as start.json has it (older files)
+    bool hoverRise = false;           // glass rises with the pointer's magnification wave
     bool autoWidth = true;           // shrink to the content
     bool showClock = true;
     bool showTray = true;
@@ -47,7 +50,7 @@ struct Settings {
     std::wstring autoHide = L"fullscreen";
     std::wstring statusStyle = L"ring"; // the status entry: ring (a ring round the Wi-Fi fan) | icons (network, volume, battery)
     // One Dock, summoned at another display's bottom edge, as on macOS.
-    std::wstring dockDisplayMode = L"follow"; // follow | primary | fixed | all
+    std::wstring dockDisplayMode = L"primary"; // primary (as before several displays were known) | follow | fixed | all
     double dockDisplayDelay = 450;   // milliseconds at another display's bottom edge (100..2000)
     std::wstring dockDisplay;        // fixed display's device-interface ID
     std::wstring desktopDisplay;     // widgets and Stage Manager; empty follows the system primary
@@ -70,6 +73,7 @@ struct Settings {
     bool stageManager = false;
     bool stageOnRight = false;       // the strip's side; left by default (the widgets take the other side)
     bool stageAutoHide = false;      // the strip only comes out while the pointer rests on its edge of the screen
+    bool stageMinimize = false;      // a window minimized on the stage goes to the strip
     // The widgets' material: glass (the bar's, its ink adapting) | dusk (the glass dimmed, white ink;
     // macOS's dimmed desktop widgets) | color (their own opaque faces, as macOS's full-colour widgets).
     std::wstring widgetMaterial = L"glass";

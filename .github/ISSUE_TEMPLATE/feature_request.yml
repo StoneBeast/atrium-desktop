@@ -1,16 +1,37 @@
-name: Idea or design feedback
-description: Suggest a feature or comment on the architecture
+name: 功能建议 / Idea or design feedback
+description: 建议新功能，或对设计、架构提意见 / Suggest a feature or comment on the design and architecture
 labels: [design]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢建议！中文或英文都可以。提交前可以先搜一下已有的 issue，相同的建议在同一处补充就好。如果是某个功能不正常，请用“问题反馈”模板。
+        Thanks for the idea! Chinese or English are both fine. Please search existing issues first and add to one if it is the same idea. If something is broken, use the bug report template instead.
   - type: textarea
     id: idea
     attributes:
-      label: Idea
-      description: What should Atrium do, and why?
+      label: 建议 / Idea
+      description: 希望 Atrium 做什么，为什么需要它 / What should Atrium do, and why?
+      placeholder: |
+        想要的效果 / What I would like：
+        使用场景 / When I would use it：
     validations:
       required: true
   - type: textarea
-    id: constraints
+    id: current
     attributes:
-      label: Windows constraints
-      description: Public APIs involved, or known limitations.
+      label: 现在的情况 / What happens now
+      description: 现在是怎么做的，哪里不顺手 / How you do it today and what gets in the way.
+  - type: textarea
+    id: reference
+    attributes:
+      label: 参考图或视频 / Pictures or videos for reference
+      description: |
+        截图、草图，或其他软件（macOS、Windows 各版本等）的类似效果，直接拖进来即可；视频建议 10 MB 以内的 mp4。
+        Screenshots, sketches, or how other software (macOS, other Windows versions…) does it. Drag them in; keep videos under 10 MB (mp4).
+  - type: input
+    id: build
+    attributes:
+      label: Windows 版本（可选）/ Windows version (optional)
+      description: "`Win + R` › `winver` 的第二行 / the second line of `winver`"
+      placeholder: 版本 24H2（OS 内部版本 26100.2454） / Version 24H2 (OS Build 26100.2454)

@@ -41,7 +41,8 @@ internal sealed class BarFace
     private readonly StatusIcons _statusIcons = new();
     private readonly TextBlock _time = Clock(true), _date = Clock(false), _timeHalo = Clock(true), _dateHalo = Clock(false);
     private (MainWindow.BarGeometry Geometry, bool Dark, int Apps, int Running, double Magnify, double Zoom, double X, double Y,
-             (double Fill, bool Charging, bool Low) Battery)? _layout;
+             StatusLook Status)? _layout;
+    private (double X, double Y, double Size, bool Icons, Color Ink)? _statusAt;
 
     public BarFace(Canvas canvas, int maxIcons)
     {
@@ -70,6 +71,16 @@ internal sealed class BarFace
     }
 
     public IReadOnlyList<Image> Icons => _icons;
+
+    // The status entry in another state (the status page's demonstration), where Layout put it.
+    public void ShowStatus(StatusLook status)
+    {
+        if (_statusAt is not var (x, y, size, icons, ink)) return;
+        if (icons) _statusIcons.Update(size, ink, status);
+        else _status.Update(size, ink, status);
+        Canvas.SetLeft(icons ? _statusIcons : _status, x);
+        Canvas.SetTop(icons ? _statusIcons : _status, y);
+    }
 
     private static FontIcon Glyph(string glyph) => new()
     {
@@ -119,11 +130,11 @@ internal sealed class BarFace
 
     // Lays everything out for layout L (hero DIP), seen at `zoom` from origin (ox, oy).
     public void Layout(MainWindow.BarGeometry L, bool darkInk, int shownApps, int runningIndex, double magnify, double zoom, double ox, double oy,
-                       (double Fill, bool Charging, bool Low) battery)
+                       StatusLook status)
     {
         // Material edits change the rendered glass, not the marks on it. Keep their geometries
-        // and brushes until their layout, ink or battery actually changes; clocks update separately.
-        var layout = (L, darkInk, shownApps, runningIndex, magnify, zoom, ox, oy, battery);
+        // and brushes until their layout, ink or status actually changes; clocks update separately.
+        var layout = (L, darkInk, shownApps, runningIndex, magnify, zoom, ox, oy, status);
         if (_layout == layout) return;
         _layout = layout;
         var inkColor = darkInk ? DarkInk : LightInk;
@@ -235,16 +246,13 @@ internal sealed class BarFace
         bool icons = L.StatusExtra > 0;
         _status.Visibility = L.StatusX < 0 || icons ? Visibility.Collapsed : Visibility.Visible;
         _statusIcons.Visibility = L.StatusX < 0 || !icons ? Visibility.Collapsed : Visibility.Visible;
+        _statusAt = null;
         if (L.StatusX >= 0)
         {
             // The three icons are centred on the wider entry (an icon square drawn past its sides).
             var (x, y, size) = Item(L.StatusX + L.StatusExtra / 2);
-            if (icons)
-                _statusIcons.Update(size, inkColor, battery.Fill, battery.Charging, battery.Low, !HasBattery());
-            else
-                _status.Update(size, inkColor, battery.Fill, battery.Charging, battery.Low, 3, !HasBattery());
-            Canvas.SetLeft(icons ? _statusIcons : _status, x);
-            Canvas.SetTop(icons ? _statusIcons : _status, y);
+            _statusAt = (x, y, size, icons, inkColor);
+            ShowStatus(status);
         }
 
         // The clock: moves with the stretched bar, does not grow; time 25 %, date 19 % of the bar's
@@ -275,187 +283,306 @@ internal sealed class BarFace
     }
 }
 
+// The height of a line of text in a TextBlock's font: what DWrite centres in a box (Canvas::Text's
+// centred paragraphs), so marks sit where the core's do.
+internal static class TextMetrics
+{
+    private static readonly Dictionary<(string, double, int), double> Lines = new();
+
+    public static double Line(TextBlock t)
+    {
+        var key = (t.FontFamily.Source, t.FontSize, (int)t.FontWeight.Weight);
+        if (Lines.TryGetValue(key, out double h)) return h;
+        var probe = new TextBlock { FontFamily = t.FontFamily, FontSize = t.FontSize, FontWeight = t.FontWeight, Text = "Ag", IsTextScaleFactorEnabled = false };
+        probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return Lines[key] = probe.DesiredSize.Height;
+    }
+}
+
+// What the status entry shows (SystemStatus and BarPainter's StatusMotion): the battery, the volume, the
+// connection, and how far a changed volume or brightness has taken the ring over (0..1 each).
+internal sealed record StatusLook(double Fill, int Percent, bool Battery, bool Charging, int Volume = 50, bool Muted = false, int Lit = 3,
+                                  bool Connected = true, bool Wifi = true, double VolumeMix = 0, double BrightMix = 0)
+{
+    public bool Low => Battery && !Charging && Percent >= 0 && Percent <= 20;
+
+    // The computer's own battery (none on a desktop: the ring is the volume), Wi-Fi at full strength.
+    public static StatusLook Current()
+    {
+        var (fill, charging, _) = BarFace.Battery();
+        bool battery = BarFace.HasBattery();
+        return battery ? new StatusLook(fill, (int)Math.Round(fill * 100), true, charging) : new StatusLook(0.5, -1, false, false);
+    }
+}
+
 // The status ring (BarPainter::DrawStatus) in an h x h square: a ring open by 64 degrees at the
-// bottom, filled clockwise from the gap's left end, a bolt in the gap while charging (a speaker
-// where there is no battery, the ring then the volume), and in the
-// middle the iPhone's Wi-Fi fan (wifi_glyph.cpp): a wedge and two arcs, as many lit as the signal.
+// bottom, filled clockwise from the gap's left end; a bolt in the gap while charging (a small speaker
+// where there is no battery, the ring then the volume); in the middle the iPhone's Wi-Fi fan
+// (wifi_glyph.cpp), or the speaker or the sun while a changed level shows on the ring.
 internal sealed class StatusGlyph : Canvas
 {
     private readonly Path _track = Stroke(), _level = Stroke(), _bolt = new() { IsHitTestVisible = false };
-    private readonly TextBlock _speaker = new() { IsHitTestVisible = false, FontFamily = new FontFamily("Segoe Fluent Icons"), Text = "\uE994",
-                                                  TextAlignment = TextAlignment.Center };
-    private readonly Path _wedge = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
-    private readonly Path _arc1 = Stroke(), _arc2 = Stroke();
+    private readonly WifiFan _fan = new();
+    private readonly TextBlock _wired = Symbol(), _speaker = Symbol(), _sun = Symbol(), _gapSpeaker = Symbol();
 
     public StatusGlyph()
     {
         IsHitTestVisible = false;
-        foreach (var p in new[] { _track, _level, _bolt, _wedge, _arc1, _arc2 }) Children.Add(p);
-        Children.Add(_speaker);
+        foreach (var e in new UIElement[] { _track, _level, _bolt, _fan, _wired, _speaker, _sun, _gapSpeaker }) Children.Add(e);
     }
 
-    private static Path Stroke() => new() { IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
+    internal static Path Stroke() => new() { IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
 
-    private static Point At(double cx, double cy, double r, double deg) =>
+    internal static TextBlock Symbol() => new()
+    {
+        IsHitTestVisible = false, FontFamily = new FontFamily("Segoe Fluent Icons"), TextAlignment = TextAlignment.Center, IsTextScaleFactorEnabled = false,
+    };
+
+    // A glyph centred in the w x w square at (x, y).
+    internal static void Place(TextBlock t, string glyph, double x, double y, double w, double size, Color color)
+    {
+        t.Visibility = color.A < 1 ? Visibility.Collapsed : Visibility.Visible;
+        t.Text = glyph;
+        t.FontSize = Math.Max(1, size);
+        t.Width = w;
+        t.Foreground = new SolidColorBrush(color);
+        Canvas.SetLeft(t, x);
+        Canvas.SetTop(t, y + (w - TextMetrics.Line(t)) / 2);
+    }
+
+    internal static Point At(double cx, double cy, double r, double deg) =>
         new(cx + r * Math.Cos(deg * Math.PI / 180), cy + r * Math.Sin(deg * Math.PI / 180));
 
-    private static PathGeometry Arc(double cx, double cy, double r, double from, double sweep)
+    internal static PathGeometry Arc(double cx, double cy, double r, double from, double sweep)
     {
         var f = new PathFigure { StartPoint = At(cx, cy, r, from), IsClosed = false, IsFilled = false };
         f.Segments.Add(new ArcSegment { Point = At(cx, cy, r, from + sweep), Size = new Size(r, r), SweepDirection = SweepDirection.Clockwise, IsLargeArc = sweep > 180 });
         return new PathGeometry { Figures = { f } };
     }
 
-    private static Color Fade(Color c, double a) => Color.FromArgb((byte)Math.Round(c.A * a), c.R, c.G, c.B);
+    internal static Color Fade(Color c, double a) => Color.FromArgb((byte)Math.Round(c.A * Math.Clamp(a, 0, 1)), c.R, c.G, c.B);
 
-    public void Update(double h, Color ink, double fill, bool charging, bool low, int lit, bool desktop = false)
+    internal static Color Red(Color ink) => ink.R < 128 ? Color.FromArgb(255, 0xE0, 0x35, 0x2B) : Color.FromArgb(255, 0xFF, 0x45, 0x3A);
+
+    internal static string VolumeGlyph(StatusLook s) =>
+        s.Muted || s.Volume == 0 ? "\uE74F" : s.Volume < 34 ? "\uE993" : s.Volume < 67 ? "\uE994" : "\uE995";
+
+    // The bolt (BarPainter's chargingBolt_): six points in a unit square.
+    internal static readonly (double X, double Y)[] BoltPoints = { (0.18, -0.5), (-0.4, 0.08), (-0.02, 0.08), (-0.18, 0.5), (0.4, -0.08), (0.02, -0.08) };
+
+    public void Update(double h, Color ink, StatusLook s)
     {
         Width = Height = h;
         double cx = h / 2, cy = h / 2;
+        // Inside: the connection (the fan, the wired glyph), at 60 % of the square.
+        void Connection(double size, double alpha)
+        {
+            bool wired = s.Connected && !s.Wifi;
+            _fan.Visibility = !wired && alpha > 0.003 ? Visibility.Visible : Visibility.Collapsed;
+            _wired.Visibility = Visibility.Collapsed;
+            if (alpha <= 0.003) return;
+            if (wired) Place(_wired, "\uE839", cx - size, cy - size / 2, 2 * size, size * 0.62, Fade(ink, alpha));
+            else
+            {
+                int lit = !s.Connected ? -1 : s.Lit;
+                _fan.Update(cx, cy, size * 0.62, lit, Fade(ink, alpha), Fade(ink, (lit < 0 ? 0.32 : 0.24) * alpha));
+            }
+        }
+        // The ring (the preview's computer has a playback device, so there always is one).
         const double Gap = 64, Start = 90 + Gap / 2, Sweep = 360 - Gap;
         double rad = h * 0.44, stroke = Math.Max(0.75, h * 0.07);
+        double shown = Math.Min(1, s.VolumeMix + s.BrightMix);
+        double mix = s.Battery ? s.VolumeMix : 1 - s.BrightMix; // 1: the ring shows the volume
+        Color level = ink;
+        if (s.Low)
+        {
+            var red = Red(ink);
+            level = Color.FromArgb(ink.A, (byte)(red.R + (ink.R - red.R) * shown), (byte)(red.G + (ink.G - red.G) * shown), (byte)(red.B + (ink.B - red.B) * shown));
+        }
+        bool silent = s.Muted && mix > 0.5;
         _track.Data = Arc(cx, cy, rad, Start, Sweep);
-        _track.Stroke = new SolidColorBrush(Fade(ink, 0.24));
+        _track.Stroke = new SolidColorBrush(Fade(ink, silent ? 0.16 : 0.24));
         _track.StrokeThickness = stroke;
-        fill = Math.Clamp(fill, 0, 1);
-        _level.Visibility = fill > 0.003 ? Visibility.Visible : Visibility.Collapsed;
+        double fill = Math.Clamp(s.Fill, 0, 1);
+        _level.Visibility = fill > 0.0005 ? Visibility.Visible : Visibility.Collapsed;
         _level.Data = Arc(cx, cy, rad, Start, Math.Max(0.01, Sweep * Math.Min(fill, 0.9999)));
-        _level.Stroke = new SolidColorBrush(low ? (ink.R < 128 ? Color.FromArgb(255, 0xE0, 0x35, 0x2B) : Color.FromArgb(255, 0xFF, 0x45, 0x3A)) : ink);
+        _level.Stroke = new SolidColorBrush(level);
         _level.StrokeThickness = stroke;
 
-        // The bolt, in the gap.
-        _bolt.Visibility = charging ? Visibility.Visible : Visibility.Collapsed;
-        if (charging)
+        // In the gap: the bolt while charging (fading out while a level shows).
+        double bolt = s.Battery && s.Charging ? 1 - shown : 0;
+        _bolt.Visibility = bolt > 0.003 ? Visibility.Visible : Visibility.Collapsed;
+        if (bolt > 0.003)
         {
-            (double X, double Y)[] pts = { (0.18, -0.5), (-0.4, 0.08), (-0.02, 0.08), (-0.18, 0.5), (0.4, -0.08), (0.02, -0.08) };
-            var f = new PathFigure { IsClosed = true, IsFilled = true, StartPoint = new Point(cx + pts[0].X * 0.17 * h, cy + (0.44 + pts[0].Y * 0.26) * h) };
-            for (int i = 1; i < pts.Length; i++)
-                f.Segments.Add(new LineSegment { Point = new Point(cx + pts[i].X * 0.17 * h, cy + (0.44 + pts[i].Y * 0.26) * h) });
+            Point P((double X, double Y) p) => new(cx + p.X * 0.17 * h, cy + (0.44 + p.Y * 0.26) * h);
+            var f = new PathFigure { IsClosed = true, IsFilled = true, StartPoint = P(BoltPoints[0]) };
+            for (int i = 1; i < BoltPoints.Length; i++) f.Segments.Add(new LineSegment { Point = P(BoltPoints[i]) });
             _bolt.Data = new PathGeometry { Figures = { f } };
-            _bolt.Fill = new SolidColorBrush(ink);
+            _bolt.Fill = new SolidColorBrush(Fade(ink, bolt));
         }
 
-        // A desktop's speaker, in the gap (BarPainter::DrawStatus): 22 % of the square, centred on the ring's bottom.
-        _speaker.Visibility = desktop && !charging ? Visibility.Visible : Visibility.Collapsed;
-        if (desktop)
-        {
-            _speaker.FontSize = Math.Max(1, h * 0.22);
-            _speaker.Foreground = new SolidColorBrush(ink);
-            _speaker.Width = h / 2;
-            _speaker.LineHeight = h / 2;
-            _speaker.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
-            Canvas.SetLeft(_speaker, cx - h / 4);
-            Canvas.SetTop(_speaker, cy + rad - h / 4);
-        }
+        // Inside: the connection, or the speaker or the sun while a level shows.
+        double speaker = s.Battery ? s.VolumeMix : 0;
+        Connection(h * 0.6, 1 - Math.Min(1, speaker + s.BrightMix));
+        Place(_speaker, VolumeGlyph(s), 0, 0, h, h * 0.40, Fade(ink, speaker));
+        Place(_sun, "\uE706", 0, 0, h, h * 0.40, Fade(ink, s.BrightMix));
+        // No battery: the ring is the volume, a small speaker in its gap (gone while the brightness shows).
+        double gap = !s.Battery ? 1 - s.BrightMix : 0;
+        Place(_gapSpeaker, VolumeGlyph(s), cx - h / 4, cy + rad - h / 4, h / 2, h * 0.22, Fade(ink, gap));
+    }
+}
 
-        // The fan: `size` = 60 % of the square, radius 62 % of that; its point half a radius below the centre.
-        double R = h * 0.6 * 0.62, oy = cy + 0.5 * R;
+// The iPhone's Wi-Fi fan (wifi_glyph.cpp): a wedge and two arcs about a point half a radius below
+// the centre, as many lit as the signal (-1: offline, all faint).
+internal sealed class WifiFan : Canvas
+{
+    private readonly Path _wedge = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
+    private readonly Path _arc1 = StatusGlyph.Stroke(), _arc2 = StatusGlyph.Stroke();
+
+    public WifiFan()
+    {
+        IsHitTestVisible = false;
+        Children.Add(_wedge);
+        Children.Add(_arc1);
+        Children.Add(_arc2);
+    }
+
+    public void Update(double cx, double cy, double radius, int lit, Color on, Color off)
+    {
         const double Span = 78, From = 270 - Span / 2;
-        var on = new SolidColorBrush(ink);
-        var off = new SolidColorBrush(Fade(ink, 0.24));
-        double r0 = 0.37 * R;
+        double oy = cy + 0.5 * radius, r0 = 0.37 * radius;
         var wedge = new PathFigure { StartPoint = new Point(cx, oy), IsClosed = true, IsFilled = true };
-        wedge.Segments.Add(new LineSegment { Point = At(cx, oy, r0, From) });
-        wedge.Segments.Add(new ArcSegment { Point = At(cx, oy, r0, From + Span), Size = new Size(r0, r0), SweepDirection = SweepDirection.Clockwise });
+        wedge.Segments.Add(new LineSegment { Point = StatusGlyph.At(cx, oy, r0, From) });
+        wedge.Segments.Add(new ArcSegment { Point = StatusGlyph.At(cx, oy, r0, From + Span), Size = new Size(r0, r0), SweepDirection = SweepDirection.Clockwise });
         _wedge.Data = new PathGeometry { Figures = { wedge } };
-        _wedge.Fill = _wedge.Stroke = lit >= 1 ? on : off;
-        _wedge.StrokeThickness = 0.19 * 0.3 * R;
-        _arc1.Data = Arc(cx, oy, 0.595 * R, From, Span);
-        _arc1.Stroke = lit >= 2 ? on : off;
-        _arc1.StrokeThickness = 0.19 * R;
-        _arc2.Data = Arc(cx, oy, 0.905 * R, From, Span);
-        _arc2.Stroke = lit >= 3 ? on : off;
-        _arc2.StrokeThickness = 0.19 * R;
+        _wedge.Fill = _wedge.Stroke = new SolidColorBrush(lit >= 1 ? on : off);
+        _wedge.StrokeThickness = 0.19 * 0.3 * radius;
+        _arc1.Data = StatusGlyph.Arc(cx, oy, 0.595 * radius, From, Span);
+        _arc1.Stroke = new SolidColorBrush(lit >= 2 ? on : off);
+        _arc1.StrokeThickness = 0.19 * radius;
+        _arc2.Data = StatusGlyph.Arc(cx, oy, 0.905 * radius, From, Span);
+        _arc2.Stroke = new SolidColorBrush(lit >= 3 ? on : off);
+        _arc2.StrokeThickness = 0.19 * radius;
     }
 }
 
 // The status entry as the Windows taskbar shows it (BarPainter::DrawStatusIcons), centred on an
-// h x h square and wider than it: the Wi-Fi fan, the speaker with its waves, the battery.
+// h x h square and wider than it: the network, the speaker with a wave for each third of the
+// volume, the battery with its level (a bolt cut out of it while charging).
 internal sealed class StatusIcons : Canvas
 {
-    private readonly Path _wedge = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
-    private readonly Path _arc1 = Stroke(), _arc2 = Stroke(), _cone = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
-    private readonly Path[] _waves = { Stroke(), Stroke(), Stroke() };
+    private readonly WifiFan _fan = new();
+    private readonly TextBlock _wired = StatusGlyph.Symbol();
+    private readonly Path _cone = new() { IsHitTestVisible = false, StrokeLineJoin = PenLineJoin.Round };
+    private readonly Path[] _waves = { StatusGlyph.Stroke(), StatusGlyph.Stroke(), StatusGlyph.Stroke() };
+    private readonly Path _cross = StatusGlyph.Stroke();
     private readonly Path _body = new() { IsHitTestVisible = false }, _nub = new() { IsHitTestVisible = false }, _fill = new() { IsHitTestVisible = false };
 
     public StatusIcons()
     {
         IsHitTestVisible = false;
-        foreach (var p in new[] { _wedge, _arc1, _arc2, _cone, _waves[0], _waves[1], _waves[2], _body, _nub, _fill }) Children.Add(p);
+        foreach (var e in new UIElement[] { _fan, _wired, _cone, _waves[0], _waves[1], _waves[2], _cross, _body, _nub, _fill }) Children.Add(e);
     }
 
-    private static Path Stroke() => new() { IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
-
-    private static Point At(double cx, double cy, double r, double deg) =>
-        new(cx + r * Math.Cos(deg * Math.PI / 180), cy + r * Math.Sin(deg * Math.PI / 180));
-
-    private static PathGeometry Arc(double cx, double cy, double r, double from, double sweep)
-    {
-        var f = new PathFigure { StartPoint = At(cx, cy, r, from), IsClosed = false, IsFilled = false };
-        f.Segments.Add(new ArcSegment { Point = At(cx, cy, r, from + sweep), Size = new Size(r, r), SweepDirection = SweepDirection.Clockwise });
-        return new PathGeometry { Figures = { f } };
-    }
-
-    private static PathGeometry Polygon(params Point[] pts)
+    private static PathFigure Figure(IReadOnlyList<Point> pts)
     {
         var f = new PathFigure { StartPoint = pts[0], IsClosed = true, IsFilled = true };
-        for (int i = 1; i < pts.Length; i++) f.Segments.Add(new LineSegment { Point = pts[i] });
-        return new PathGeometry { Figures = { f } };
+        for (int i = 1; i < pts.Count; i++) f.Segments.Add(new LineSegment { Point = pts[i] });
+        return f;
     }
 
-    private static Color Fade(Color c, double a) => Color.FromArgb((byte)Math.Round(c.A * a), c.R, c.G, c.B);
-
-    public void Update(double h, Color ink, double fill, bool charging, bool low, bool desktop)
+    public void Update(double h, Color ink, StatusLook s)
     {
         Width = Height = h;
         double cy = h / 2, stroke = Math.Max(0.75, h * 0.075);
         double netW = 0.62 * h, speakerW = 0.60 * h, batteryW = 0.68 * h, gap = 0.18 * h;
-        double x = h / 2 - (netW + speakerW + gap + (desktop ? 0 : batteryW + gap)) / 2;
+        double x = h / 2 - (netW + speakerW + (s.Battery ? batteryW + gap : 0) + gap) / 2;
         var on = new SolidColorBrush(ink);
-        var off = new SolidColorBrush(Fade(ink, 0.24));
 
-        // The fan (wifi_glyph.cpp), fully lit: 46 % of the square high, its point half a radius below the middle.
-        double R = 0.46 * h, cx = x + netW / 2, oy = cy + 0.5 * R;
-        const double Span = 78, From = 270 - Span / 2;
-        double r0 = 0.37 * R;
-        var wedge = new PathFigure { StartPoint = new Point(cx, oy), IsClosed = true, IsFilled = true };
-        wedge.Segments.Add(new LineSegment { Point = At(cx, oy, r0, From) });
-        wedge.Segments.Add(new ArcSegment { Point = At(cx, oy, r0, From + Span), Size = new Size(r0, r0), SweepDirection = SweepDirection.Clockwise });
-        _wedge.Data = new PathGeometry { Figures = { wedge } };
-        _wedge.Fill = _wedge.Stroke = on;
-        _wedge.StrokeThickness = 0.19 * 0.3 * R;
-        _arc1.Data = Arc(cx, oy, 0.595 * R, From, Span);
-        _arc2.Data = Arc(cx, oy, 0.905 * R, From, Span);
-        _arc1.Stroke = _arc2.Stroke = on;
-        _arc1.StrokeThickness = _arc2.StrokeThickness = 0.19 * R;
+        // The network: the fan lit by the signal, the wired glyph, or a faint fan offline.
+        bool wired = s.Connected && !s.Wifi;
+        _fan.Visibility = wired ? Visibility.Collapsed : Visibility.Visible;
+        _wired.Visibility = wired ? Visibility.Visible : Visibility.Collapsed;
+        if (wired) StatusGlyph.Place(_wired, "\uE839", x - h, cy - h / 2, netW + 2 * h, h * 0.62, ink);
+        else
+        {
+            int lit = !s.Connected ? -1 : s.Lit;
+            _fan.Update(x + netW / 2, cy, h * 0.46, lit, ink, StatusGlyph.Fade(ink, lit < 0 ? 0.32 : 0.24));
+        }
         x += netW + gap;
 
-        // The speaker: a cone, two of three waves lit.
-        _cone.Data = Polygon(new Point(x, cy - 0.10 * h), new Point(x + 0.11 * h, cy - 0.10 * h), new Point(x + 0.25 * h, cy - 0.22 * h),
-                             new Point(x + 0.25 * h, cy + 0.22 * h), new Point(x + 0.11 * h, cy + 0.10 * h), new Point(x, cy + 0.10 * h));
-        _cone.Fill = _cone.Stroke = on;
+        // The speaker: a cone, a wave for each third of the volume (the others faint); muted, a cross.
+        _cone.Data = new PathGeometry { Figures = { Figure(new[] {
+            new Point(x, cy - 0.10 * h), new Point(x + 0.11 * h, cy - 0.10 * h), new Point(x + 0.25 * h, cy - 0.22 * h),
+            new Point(x + 0.25 * h, cy + 0.22 * h), new Point(x + 0.11 * h, cy + 0.10 * h), new Point(x, cy + 0.10 * h) }) } };
+        _cone.Fill = _cone.Stroke = new SolidColorBrush(StatusGlyph.Fade(ink, s.Muted ? 0.55 : 1));
         _cone.StrokeThickness = stroke * 0.6;
+        double ox = x + 0.25 * h;
+        int waves = s.Volume <= 0 ? 0 : s.Volume < 34 ? 1 : s.Volume < 67 ? 2 : 3;
         for (int i = 0; i < 3; i++)
         {
+            _waves[i].Visibility = s.Muted ? Visibility.Collapsed : Visibility.Visible;
             double r = (0.11 + 0.105 * i) * h;
-            _waves[i].Data = Arc(x + 0.25 * h, cy, r, -43, 86);
-            _waves[i].Stroke = i < 2 ? on : off;
+            _waves[i].Data = StatusGlyph.Arc(ox, cy, r, -43, 86);
+            _waves[i].Stroke = i < waves ? on : new SolidColorBrush(StatusGlyph.Fade(ink, 0.24));
             _waves[i].StrokeThickness = stroke;
+        }
+        _cross.Visibility = s.Muted ? Visibility.Visible : Visibility.Collapsed;
+        if (s.Muted)
+        {
+            double c = ox + 0.19 * h, k = 0.08 * h;
+            var g = new PathGeometry();
+            foreach (var (a, b) in new[] { (new Point(c - k, cy - k), new Point(c + k, cy + k)), (new Point(c - k, cy + k), new Point(c + k, cy - k)) })
+            {
+                var f = new PathFigure { StartPoint = a, IsClosed = false, IsFilled = false };
+                f.Segments.Add(new LineSegment { Point = b });
+                g.Figures.Add(f);
+            }
+            _cross.Data = g;
+            _cross.Stroke = on;
+            _cross.StrokeThickness = stroke;
         }
         x += speakerW + gap;
 
-        // The battery: an outline, its nub, the level (red when low).
-        foreach (var p in new[] { _body, _nub, _fill }) p.Visibility = desktop ? Visibility.Collapsed : Visibility.Visible;
-        if (desktop) return;
-        double bw = 0.58 * h, bh = 0.36 * h;
+        // The battery: an outline and its nub, the level inside (red when low), a bolt cut out of it
+        // while charging (and drawn where there is no level).
+        foreach (var p in new[] { _body, _nub, _fill }) p.Visibility = s.Battery ? Visibility.Visible : Visibility.Collapsed;
+        if (!s.Battery) return;
+        double bw = 0.58 * h, bh = 0.36 * h, rad = 0.09 * h;
         var body = new Rect(x + stroke / 2, cy - bh / 2, bw - stroke / 2, bh);
-        _body.Data = new RectangleGeometry { Rect = body };
-        _body.Stroke = new SolidColorBrush(Fade(ink, 0.9));
+        var outline = new SolidColorBrush(StatusGlyph.Fade(ink, 0.9));
+        _body.Data = RoundRect(body, rad);
+        _body.Stroke = outline;
         _body.StrokeThickness = stroke;
-        _nub.Data = new RectangleGeometry { Rect = new Rect(body.Right + 0.03 * h, cy - 0.075 * h, 0.05 * h, 0.15 * h) };
-        _nub.Fill = new SolidColorBrush(Fade(ink, 0.9));
-        double pad = stroke + 0.035 * h, inner = body.Width - 2 * pad;
-        _fill.Data = new RectangleGeometry { Rect = new Rect(body.Left + pad, body.Top + pad, Math.Max(0.06 * h, inner * Math.Clamp(fill, 0, 1)), body.Height - 2 * pad) };
-        _fill.Fill = low && !charging ? new SolidColorBrush(ink.R < 128 ? Color.FromArgb(255, 0xE0, 0x35, 0x2B) : Color.FromArgb(255, 0xFF, 0x45, 0x3A)) : on;
+        _nub.Data = RoundRect(new Rect(body.Right + 0.03 * h, cy - 0.075 * h, 0.05 * h, 0.15 * h), 0.02 * h);
+        _nub.Fill = outline;
+        double pad = stroke + 0.035 * h, level = Math.Clamp(s.Percent / 100.0, 0, 1);
+        var inner = new Rect(body.Left + pad, body.Top + pad, Math.Max(0, body.Width - 2 * pad), Math.Max(0, body.Height - 2 * pad));
+        var levelRect = new Rect(inner.Left, inner.Top, Math.Max(0.06 * h, inner.Width * level), inner.Height);
+        var shape = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        shape.Children.Add(RoundRect(levelRect, 0.035 * h));
+        if (s.Charging)
+        {
+            double bx = (body.Left + body.Right) / 2, k = bh * 0.62;
+            shape.Children.Add(new PathGeometry { Figures = { Figure(StatusGlyph.BoltPoints.Select(p => new Point(bx + p.X * k, cy + p.Y * k * 1.5)).ToList()) } });
+        }
+        _fill.Data = shape;
+        _fill.Fill = s.Low ? new SolidColorBrush(StatusGlyph.Red(ink)) : on;
+    }
+
+    private static PathGeometry RoundRect(Rect r, double radius)
+    {
+        radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2);
+        var f = new PathFigure { StartPoint = new Point(r.Left + radius, r.Top), IsClosed = true, IsFilled = true };
+        void Corner(double x, double y) => f.Segments.Add(new ArcSegment { Point = new Point(x, y), Size = new Size(radius, radius), SweepDirection = SweepDirection.Clockwise });
+        f.Segments.Add(new LineSegment { Point = new Point(r.Right - radius, r.Top) });
+        Corner(r.Right, r.Top + radius);
+        f.Segments.Add(new LineSegment { Point = new Point(r.Right, r.Bottom - radius) });
+        Corner(r.Right - radius, r.Bottom);
+        f.Segments.Add(new LineSegment { Point = new Point(r.Left + radius, r.Bottom) });
+        Corner(r.Left, r.Bottom - radius);
+        f.Segments.Add(new LineSegment { Point = new Point(r.Left, r.Top + radius) });
+        Corner(r.Left + radius, r.Top);
+        return new PathGeometry { Figures = { f } };
     }
 }

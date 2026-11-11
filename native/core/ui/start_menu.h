@@ -1,7 +1,7 @@
 // Atrium's own start menu (opened from the logo on the bar, or by the Windows
 // key: winKeyStart), a launcher of separate pieces of the bar's glass: a panel
 // with the search field and the tiles, and below it a capsule shaped like the
-// bar with the account, network, volume, battery and power.
+// bar with the account, network, volume, battery, the system tray and power.
 // The power choices open in a third piece of glass, an open folder in another
 // over the tiles.
 //
@@ -53,6 +53,14 @@ public:
     void SetRadius(float dip) { radius_ = dip; surface_.SetRadius(dip); }
     // Height of the bar (DIP): the status capsule has the same.
     void SetBarHeight(float dip) { barH_ = dip; }
+    // The tray's button in the capsule (setting startTray).
+    void SetShowTray(bool on) { showTray_ = on; }
+    // The network, volume and battery buttons in the capsule (setting startStatus).
+    void SetShowStatus(bool on) { showStatus_ = on; }
+    // The menu's size (setting startSize: small, medium, large; empty leaves it as it is).
+    void SetPreferredSize(const std::wstring& name);
+    std::wstring SizeName() const;
+    std::function<void(const std::wstring& name)> onSize; // the user picked another size in the menu
 
     std::function<void(const PinnedApp&)> onPin;            // pin to the bar (the dock)
     std::function<void(const std::wstring& what)> onSystem; // "network", "volume", "battery", "tray", "account"
@@ -216,6 +224,7 @@ private:
     bool stale_ = false;    // the catalog changed while a tile was carried
     ULONGLONG lastClosed_ = 0;
     float radius_ = 30, barH_ = 60;
+    bool showTray_ = true, showStatus_ = true;
     // The open folder.
     int folder_ = -1;
     bool folderClosing_ = false;

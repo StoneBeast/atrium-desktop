@@ -71,7 +71,44 @@ internal static partial class WidgetFaces
     };
 
     // material: glass (the glass's ink: darkInk), dusk (a dark veil, white only) or color (an opaque face).
-    public static FrameworkElement Face(string kind, string size, bool darkInk, Brush? photo = null, string material = "glass")
+    // The world clocks' cities and their Windows time zones (widget_faces.cpp, WorldCities).
+    private static readonly (string Name, string Zone)[] WorldCities =
+    {
+        ("北京", "China Standard Time"), ("上海", "China Standard Time"), ("香港", "China Standard Time"), ("台北", "Taipei Standard Time"),
+        ("东京", "Tokyo Standard Time"), ("首尔", "Korea Standard Time"), ("新加坡", "Singapore Standard Time"), ("曼谷", "SE Asia Standard Time"),
+        ("新德里", "India Standard Time"), ("迪拜", "Arabian Standard Time"), ("莫斯科", "Russian Standard Time"), ("伊斯坦布尔", "Turkey Standard Time"),
+        ("开罗", "Egypt Standard Time"), ("约翰内斯堡", "South Africa Standard Time"), ("柏林", "W. Europe Standard Time"), ("巴黎", "Romance Standard Time"),
+        ("伦敦", "GMT Standard Time"), ("圣保罗", "E. South America Standard Time"), ("纽约", "Eastern Standard Time"), ("多伦多", "Eastern Standard Time"),
+        ("芝加哥", "Central Standard Time"), ("丹佛", "Mountain Standard Time"), ("洛杉矶", "Pacific Standard Time"), ("温哥华", "Pacific Standard Time"),
+        ("安克雷奇", "Alaskan Standard Time"), ("檀香山", "Hawaiian Standard Time"), ("悉尼", "AUS Eastern Standard Time"), ("墨尔本", "AUS Eastern Standard Time"),
+        ("奥克兰", "New Zealand Standard Time"),
+    };
+
+    // WidgetCities: the widget's own choice where it made one, else the defaults.
+    private static string[] CitiesOf(string kind, IReadOnlyList<string>? chosen)
+    {
+        string[] cities = kind == "digital" ? new[] { "东京", "伦敦", "纽约" } : new[] { "北京", "东京", "伦敦", "纽约" };
+        for (int i = 0; i < cities.Length && chosen != null && i < chosen.Count; i++)
+            if (WorldCities.Any(c => c.Name == chosen[i])) cities[i] = chosen[i];
+        return cities;
+    }
+
+    // The time in a city, and how far it is from here: "今天 +1小时" (CityTime).
+    private static (DateTime Time, string When) CityTime(string name, DateTime now)
+    {
+        var t = now;
+        try
+        {
+            var zone = WorldCities.FirstOrDefault(c => c.Name == name).Zone;
+            if (zone != null) t = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(zone));
+        }
+        catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException) { }
+        double hours = Math.Round((t - now).TotalMinutes / 15) / 4;
+        int dd = t.Date.CompareTo(now.Date);
+        return (t, (dd > 0 ? "明天" : dd < 0 ? "昨天" : "今天") + (hours >= 0 ? " +" : " ") + hours.ToString("0.##") + "小时");
+    }
+
+    public static FrameworkElement Face(string kind, string size, bool darkInk, Brush? photo = null, string material = "glass", IReadOnlyList<string>? cities = null)
     {
         var (w, h) = Size(size);
         var c = new Canvas { Width = w, Height = h, IsHitTestVisible = false };
@@ -91,18 +128,16 @@ internal static partial class WidgetFaces
                 break;
             case "clock":
             {
-                (string Name, int Offset)[] cities = { ("北京", 0), ("东京", 1), ("伦敦", -8), ("纽约", -13) };
+                var names = CitiesOf(kind, cities);
                 double colW = (w - 2 * Pad) / 4, R = 31;
                 for (int i = 0; i < 4; i++)
                 {
-                    var t = now.AddHours(cities[i].Offset);
+                    var (t, when) = CityTime(names[i], now);
                     bool night = t.Hour < 6 || t.Hour >= 18;
                     double cx = Pad + colW * (i + 0.5), cy = (h - 2 * R - 42) / 2 + R - 2;
                     Color face = night ? p.NightFace : p.Face, ink = night ? Color.FromArgb(245, 255, 255, 255) : p.Text;
                     ClockFace(c, cx, cy, R, t, face, ink, false, null, ink, p);
-                    Text(c, cities[i].Name, cx - colW / 2, cy + R + 8, cx + colW / 2, cy + R + 26, 12.5, p.Text, 2, 1, p);
-                    int dd = t.Date.CompareTo(now.Date);
-                    string when = (dd > 0 ? "明天" : dd < 0 ? "昨天" : "今天") + (cities[i].Offset >= 0 ? " +" : " ") + cities[i].Offset + "小时";
+                    Text(c, names[i], cx - colW / 2, cy + R + 8, cx + colW / 2, cy + R + 26, 12.5, p.Text, 2, 1, p);
                     Text(c, when, cx - colW / 2, cy + R + 26, cx + colW / 2, cy + R + 42, 10.5, p.Sub, 0, 1, p);
                 }
                 break;
@@ -119,16 +154,14 @@ internal static partial class WidgetFaces
                 Text(c, $"{now.Month}月{now.Day}日", Pad + 2, h - Pad - 20, Pad + leftW, h - Pad, 13, p.Text, 0, 0, p);
                 if (size == "small") break;
                 double x0 = Pad + leftW + 8, rowH = (h - 2 * Pad) / 3;
-                (string Name, int Offset)[] more = { ("东京", 1), ("伦敦", -8), ("纽约", -13) };
+                var more = CitiesOf(kind, cities);
                 for (int i = 0; i < 3; i++)
                 {
                     double y = Pad + rowH * i;
-                    var t = now.AddHours(more[i].Offset);
+                    var (t, when) = CityTime(more[i], now);
                     if (i > 0) Line(c, x0, y, w - Pad, y, A(p.Text, 0.12), 1);
-                    int dd = t.Date.CompareTo(now.Date);
-                    Text(c, more[i].Name, x0, y + 4, w - Pad - 70, y + rowH / 2 + 2, 13, p.Text, 2, 0, p);
-                    Text(c, (dd > 0 ? "明天" : dd < 0 ? "昨天" : "今天") + (more[i].Offset >= 0 ? " +" : " ") + more[i].Offset + "小时",
-                         x0, y + rowH / 2, w - Pad - 70, y + rowH - 4, 10.5, p.Sub, 0, 0, p);
+                    Text(c, more[i], x0, y + 4, w - Pad - 70, y + rowH / 2 + 2, 13, p.Text, 2, 0, p);
+                    Text(c, when, x0, y + rowH / 2, w - Pad - 70, y + rowH - 4, 10.5, p.Sub, 0, 0, p);
                     Text(c, t.ToString("H:mm"), w - Pad - 80, y, w - Pad, y + rowH, 22, p.Text, 2, 2, p);
                 }
                 break;
@@ -308,14 +341,26 @@ internal static partial class WidgetFaces
         catch (ArgumentOutOfRangeException) { return (1, 1, false); }
     }
 
-    private static string LunarMonthDay(DateTime t)
+    internal static string LunarMonthDay(DateTime t)
     {
         var (m, d, leap) = ToLunar(t);
         return (leap ? "闰" : "") + LunarMonths[Math.Clamp(m, 1, 12) - 1] + "月" + LunarDay(d);
     }
 
+    // ChineseCalendar::Line: "农历丙午年 九月廿三".
+    internal static string LunarLine(DateTime t)
+    {
+        const string stems = "甲乙丙丁戊己庚辛壬癸", branches = "子丑寅卯辰巳午未申酉戌亥";
+        try
+        {
+            int n = Lunar.GetSexagenaryYear(t);
+            return $"农历{stems[(n - 1) % 10]}{branches[(n - 1) % 12]}年 {LunarMonthDay(t)}";
+        }
+        catch (ArgumentOutOfRangeException) { return ""; }
+    }
+
     // ChineseCalendar::DayLabel: the festivals, else the day (the month's name on its first day).
-    private static string DayLabel(DateTime t, out bool festival)
+    internal static string DayLabel(DateTime t, out bool festival)
     {
         festival = true;
         if (t.Month == 1 && t.Day == 1) return "元旦";

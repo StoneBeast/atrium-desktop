@@ -15,12 +15,23 @@ var settings = new BarSettings
 var parsed = BarSettings.FromJson(settings.ToJson(), new());
 Require(settings.SameAs(parsed), "Display preferences must survive a settings round trip.");
 Require(BarSettings.FromJson(new JsonObject(), new()).SameAs(new()), "Old files must receive display defaults.");
-Require(BarSettings.FromJson(new JsonObject(), new()).HoverRise, "Old files must keep hover rise enabled.");
+Require(!BarSettings.FromJson(new JsonObject(), new()).HoverRise, "Old files must keep the glass flat.");
+Require(BarSettings.FromJson(new JsonObject(), new() { HoverRise = true }).HoverRise, "Partial updates must retain enabled hover rise.");
 Require(!BarSettings.FromJson(new JsonObject(), settings).HoverRise, "Partial updates must retain disabled hover rise.");
 Require(!BarSettings.FromJson(JsonNode.Parse("""{"hoverRise":"bad"}""")!.AsObject(), settings).HoverRise,
     "Malformed hover rise must retain the current value.");
 parsed = BarSettings.FromJson(JsonNode.Parse("""{"hoverRise":true}""")!.AsObject(), settings);
 Require(parsed.HoverRise && parsed.Magnify == settings.Magnify, "Hover rise must toggle without changing icon magnification.");
+Require(BarSettings.FromJson(new JsonObject(), new()).StartStatus && BarSettings.FromJson(new JsonObject(), new()).StartTray,
+    "Old files must keep the start menu's status and tray buttons.");
+parsed = BarSettings.FromJson(JsonNode.Parse("""{"startStatus":false}""")!.AsObject(), new());
+Require(!parsed.StartStatus && parsed.StartTray && BarSettings.FromJson(parsed.ToJson(), new()).SameAs(parsed),
+    "The start menu's status buttons must turn off on their own and survive a round trip.");
+Require(!new BarSettings().SameAs(parsed), "The start menu's status buttons must participate in the Save/Revert dirty state.");
+Require(!BarSettings.FromJson(new JsonObject(), new()).StageMinimize, "Old files must keep minimized windows out of Stage Manager.");
+parsed = BarSettings.FromJson(JsonNode.Parse("""{"stageMinimize":true}""")!.AsObject(), new());
+Require(parsed.StageMinimize && BarSettings.FromJson(parsed.ToJson(), new()).StageMinimize && !new BarSettings().SameAs(parsed),
+    "Minimizing to Stage Manager must survive a round trip and mark the settings dirty.");
 Require(!BarSettings.FromJson(new JsonObject(), new()).TaskbarRightPrimaryOnly, "Old files must keep right-side elements on every display.");
 Require(BarSettings.FromJson(new JsonObject(), settings).TaskbarRightPrimaryOnly, "Partial updates must retain primary-only visibility.");
 Require(BarSettings.FromJson(JsonNode.Parse("""{"taskbarRightPrimaryOnly":"bad"}""")!.AsObject(), settings).TaskbarRightPrimaryOnly,
@@ -42,7 +53,7 @@ foreach (string mode in new[] { "all", "primaryAndWindow", "window" })
     Require(BarSettings.FromJson(settings.ToJson(), new()).TaskbarApps == mode, "Every task distribution mode must be retained.");
 }
 parsed = BarSettings.FromJson(JsonNode.Parse("""{"dockDisplayMode":"bad","taskbarApps":"bad","dockDisplayDelay":99999}""")!.AsObject(), new());
-Require(parsed.DockDisplayMode == "follow" && parsed.TaskbarApps == "all" && parsed.DockDisplayDelay == 2000, "Invalid values must normalize like the native core.");
+Require(parsed.DockDisplayMode == "primary" && parsed.TaskbarApps == "all" && parsed.DockDisplayDelay == 2000, "Invalid values must normalize like the native core.");
 parsed = BarSettings.FromJson(JsonNode.Parse("""{"dockDisplayDelay":-1}""")!.AsObject(), new());
 Require(parsed.DockDisplayDelay == 100, "Delay must have a lower bound.");
 parsed = BarSettings.FromJson(JsonNode.Parse("""{"dockDisplayDelay":"bad","desktopDisplay":false}""")!.AsObject(), settings);

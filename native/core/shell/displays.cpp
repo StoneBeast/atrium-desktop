@@ -1,5 +1,7 @@
 #include "displays.h"
 
+#include <shellapi.h>
+
 #include <algorithm>
 
 namespace atrium {
@@ -48,6 +50,40 @@ std::optional<bool> WindowCoverOnMonitor(HMONITOR windowMonitor, const RECT& fra
 bool AtDisplayBottom(POINT pointer, const RECT& bounds)
 {
     return PtInRect(&bounds, pointer) && pointer.y >= bounds.bottom - 2;
+}
+
+bool FullScreenInFront(HMONITOR monitor)
+{
+    HWND fg = GetForegroundWindow();
+    HWND root = fg ? GetAncestor(fg, GA_ROOT) : nullptr;
+    // No foreground for a moment (it is changing hands): the top app window on this screen.
+    for (HWND w = root ? nullptr : GetTopWindow(nullptr); w; w = GetWindow(w, GW_HWNDNEXT)) {
+        const LONG_PTR ex = GetWindowLongPtrW(w, GWL_EXSTYLE);
+        DWORD owner = 0;
+        GetWindowThreadProcessId(w, &owner);
+        if (IsWindowVisible(w) && !IsIconic(w) && owner != GetCurrentProcessId() && !(ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) &&
+            !GetWindow(w, GW_OWNER) && MonitorFromWindow(w, MONITOR_DEFAULTTONULL) == monitor) {
+            root = w;
+            break;
+        }
+    }
+    DWORD pid = 0;
+    if (!root || !GetWindowThreadProcessId(root, &pid) || pid == GetCurrentProcessId() ||
+        MonitorFromWindow(root, MONITOR_DEFAULTTONULL) != monitor)
+        return false;
+    wchar_t cls[64] = {};
+    GetClassNameW(root, cls, 64);
+    if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd") || !wcscmp(cls, L"Shell_SecondaryTrayWnd"))
+        return false;
+    QUERY_USER_NOTIFICATION_STATE state{};
+    if (SUCCEEDED(SHQueryUserNotificationState(&state)) && state == QUNS_RUNNING_D3D_FULL_SCREEN)
+        return true;
+    // Maximized fills only the work area (all of it when Windows' taskbar is hidden).
+    MONITORINFO mi{sizeof(mi)};
+    RECT r{};
+    if (IsZoomed(root) || IsIconic(root) || !GetMonitorInfoW(monitor, &mi) || !GetWindowRect(root, &r))
+        return false;
+    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
 }
 
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,

@@ -29,8 +29,11 @@ void CheckSettings()
     settings.hoverRise = false;
     Require(Settings::FromJson(settings.ToJson(), Settings{}, parsed), "settings round trip parses");
     Require(!parsed.hoverRise, "disabled hover rise survives saving");
-    Require(Settings::FromJson(LR"({})", Settings{}, parsed) && parsed.hoverRise, "old settings keep hover rise enabled");
+    Require(Settings::FromJson(LR"({})", Settings{}, parsed) && !parsed.hoverRise, "old settings keep the glass flat");
     Require(Settings::FromJson(LR"({})", settings, parsed) && !parsed.hoverRise, "partial updates retain disabled hover rise");
+    Settings raised = settings;
+    raised.hoverRise = true;
+    Require(Settings::FromJson(LR"({})", raised, parsed) && parsed.hoverRise, "partial updates retain enabled hover rise");
     Require(Settings::FromJson(LR"({"hoverRise":"bad"})", settings, parsed) && !parsed.hoverRise,
         "malformed hover rise retains the current value");
     Require(Settings::FromJson(LR"({"hoverRise":true})", settings, parsed) && parsed.hoverRise && parsed.magnify == settings.magnify,
@@ -52,14 +55,14 @@ void CheckSettings()
         settings.taskbarApps = mode;
         Require(Settings::FromJson(settings.ToJson(), Settings{}, parsed) && parsed.taskbarApps == mode, "every task distribution mode survives saving");
     }
-    Require(Settings::FromJson(LR"({"height":64})", Settings{}, parsed) && parsed.dockDisplayMode == L"follow" &&
+    Require(Settings::FromJson(LR"({"height":64})", Settings{}, parsed) && parsed.dockDisplayMode == L"primary" &&
             parsed.taskbarApps == L"all" && parsed.dockDisplayDelay == 450 && !parsed.taskbarRightPrimaryOnly &&
             parsed.notifyPlacement == L"dock", "old settings retain right-side elements and default dock notifications");
     Require(Settings::FromJson(LR"({"notifyPlacement":"bad"})", Settings{}, parsed) && parsed.notifyPlacement == L"dock", "invalid notification placement uses the default");
     Require(Settings::FromJson(LR"({"notifyPlacement":false})", settings, parsed) && parsed.notifyPlacement == L"topRight", "malformed notification placement retains the current value");
     Require(Settings::FromJson(LR"({"notifyPlacement":"dock"})", settings, parsed) && parsed.notifyPlacement == L"dock", "notification placement can return to the default");
     Require(Settings::FromJson(LR"({"dockDisplayMode":"bad","taskbarApps":"bad","dockDisplayDelay":99999})", Settings{}, parsed) &&
-            parsed.dockDisplayMode == L"follow" && parsed.taskbarApps == L"all" && parsed.dockDisplayDelay == 2000, "invalid values are normalized");
+            parsed.dockDisplayMode == L"primary" && parsed.taskbarApps == L"all" && parsed.dockDisplayDelay == 2000, "invalid values are normalized");
     Require(Settings::FromJson(LR"({"dockDisplayDelay":-1})", Settings{}, parsed) && parsed.dockDisplayDelay == 100, "delay has a lower bound");
     Require(Settings::FromJson(LR"({"dockDisplayDelay":"bad","dockDisplay":false})", settings, parsed) &&
             parsed.dockDisplayDelay == 750 && parsed.dockDisplay == settings.dockDisplay, "malformed keys retain current values");

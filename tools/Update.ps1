@@ -23,6 +23,8 @@ $swapped = $false
 $confirmed = $false
 $restored = $false
 $started = New-Object 'System.Collections.Generic.List[System.Diagnostics.Process]'
+# Never the install folder: what starts there would hold it, and the next update could not replace it.
+$workingDirectory = [Environment]::GetFolderPath('UserProfile')
 
 function Assert-TemporaryPath([string]$Path) {
     $absolute = [IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -31,11 +33,37 @@ function Assert-TemporaryPath([string]$Path) {
          (Split-Path -Leaf $absolute) -ne "$name.previous-$suffix")) { throw '更新临时目录无效。' }
 }
 
+# Moves what is in $From into $To (merging folders). A folder some process is in (its current
+# directory, e.g. an app started from an older Atrium) cannot be moved itself: its contents go, it stays.
+function Move-Tree([string]$From, [string]$To, [switch]$Keep) {
+    if (!(Test-Path -LiteralPath $To)) { New-Item -ItemType Directory -Path $To | Out-Null }
+    foreach ($item in @(Get-ChildItem -LiteralPath $From -Force)) {
+        $target = Join-Path $To $item.Name
+        if ($item.PSIsContainer -and (Test-Path -LiteralPath $target)) { Move-Tree $item.FullName $target; continue }
+        if ($item.PSIsContainer) {
+            try { Move-Item -LiteralPath $item.FullName -Destination $target }
+            catch { Move-Tree $item.FullName $target }
+            continue
+        }
+        # A file just written may be open for a moment (a virus scanner reading it).
+        for ($try = 1; ; $try++) {
+            try { Move-Item -LiteralPath $item.FullName -Destination $target; break }
+            catch {
+                if ($try -lt 6) { Start-Sleep -Milliseconds 300; continue }
+                throw "无法替换 $($item.FullName)（$($_.Exception.Message.TrimEnd('。', '.'))），请关闭正在使用它的程序后重试。"
+            }
+        }
+    }
+    if (!$Keep) {
+        try { Remove-Item -LiteralPath $From -Force } catch { }
+    }
+}
+
 function Start-Verified([string]$Executable, [string]$Kind, [string]$Arguments) {
     $eventName = "Local\Atrium.Update.$Kind.$suffix"
     $ready = New-Object System.Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, $eventName)
     try {
-        $process = Start-Process -FilePath $Executable -ArgumentList "$Arguments --ready-event $eventName" -WorkingDirectory $install -WindowStyle Hidden -PassThru
+        $process = Start-Process -FilePath $Executable -ArgumentList "$Arguments --ready-event $eventName" -WorkingDirectory $workingDirectory -WindowStyle Hidden -PassThru
         $started.Add($process)
         $until = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
         do {
@@ -89,13 +117,18 @@ try {
     } finally { $quit.Dispose() }
     $coreStopped = $true
     Assert-TemporaryPath $backup
-    Move-Item -LiteralPath $install -Destination $backup
-    try {
-        Assert-TemporaryPath $incoming
-        Move-Item -LiteralPath $incoming -Destination $install
-    } catch {
-        Assert-TemporaryPath $backup
-        Move-Item -LiteralPath $backup -Destination $install
+    Assert-TemporaryPath $incoming
+    # The folder itself stays (an app may be in it); what is in it is replaced.
+    try { Move-Tree $install $backup -Keep }
+    catch {
+        Move-Tree $backup $install
+        $restored = $true
+        throw
+    }
+    try { Move-Tree $incoming $install }
+    catch {
+        Move-Tree $install $incoming -Keep
+        Move-Tree $backup $install
         $restored = $true
         throw
     }
@@ -116,9 +149,9 @@ try {
         try {
             Stop-NewProcesses
             Assert-TemporaryPath $incoming
-            Move-Item -LiteralPath $install -Destination $incoming
+            Move-Tree $install $incoming -Keep
             Assert-TemporaryPath $backup
-            Move-Item -LiteralPath $backup -Destination $install
+            Move-Tree $backup $install
             $restored = $true
         } catch { $failure += " 恢复旧包未完成：$($_.Exception.Message)；恢复副本保留在 $backup。" }
     }
@@ -135,9 +168,9 @@ try {
     }
     if (!$confirmed -and (!$swapped -or $restored)) {
         if ($coreStopped -and $StartCore -eq '1') {
-            Start-Process -FilePath (Join-Path $install 'Atrium.exe') -WorkingDirectory $install -WindowStyle Hidden
+            Start-Process -FilePath (Join-Path $install 'Atrium.exe') -WorkingDirectory $workingDirectory -WindowStyle Hidden
         }
-        Start-Process -FilePath (Join-Path $install 'Settings\Atrium.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $install -WindowStyle Hidden
+        Start-Process -FilePath (Join-Path $install 'Settings\Atrium.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
     }
     if ($confirmed) {
         $work = $package
